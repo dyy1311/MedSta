@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+*.local
+
+# 测试产物
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# 环境与密钥
+.env
+.env.local
+
+# 运行时数据（会话记录、上传数据、图表 artifact）
+backend/data/
+*.sqlite3
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
