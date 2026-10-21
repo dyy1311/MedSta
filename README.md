@@ -1,5 +1,7 @@
 # MedSta
 
+[![CI](https://github.com/dyy1311/MedSta/actions/workflows/ci.yml/badge.svg)](https://github.com/dyy1311/MedSta/actions/workflows/ci.yml)
+
 面向数据研究者的轻量级 AI 赋能数据分析智能体（Web 端）。用户上传数据（CSV/Excel）后，系统解析整理数据画像，以 ReAct 方式与用户讨论形成分析方案（统计分析/预测/绘图），方案确定后以 pipeline 执行，交付图表与解释建议；用户可修正方案并再次执行，最终交付成果。
 
 ## 统计能力（方法学依据见 `docs/statistics-methods.md`）
@@ -39,6 +41,21 @@ python main.py --prod
 ```
 
 也可以分别启动：后端 `cd backend && uvicorn medsta.app:app --reload --port 8000`；前端 `cd frontend && npm run dev`。
+
+## 持续集成
+
+推送 `main` 或提交 PR 时，GitHub Actions 自动运行三个作业：后端 pytest（覆盖率门槛 83%）、
+前端 lint/build/vitest、Playwright E2E（安装 CJK 字体）。失败时上传覆盖率与 Playwright trace。
+配置见 `.github/workflows/ci.yml`。
+
+本地等价检查（无需远端）：
+
+```bash
+bash scripts/ci.sh                  # 全量：后端 + 前端 + E2E
+CI_SKIP_E2E=1 bash scripts/ci.sh    # 跳过浏览器端
+```
+
+分支保护（CI 必过才能合并）需在 GitHub 仓库 Settings → Branches 中手动开启。
 
 ## 测试
 

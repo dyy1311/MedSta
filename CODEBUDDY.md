@@ -37,6 +37,11 @@ cd frontend && npm run lint     # ESLint
 cd frontend && npm test         # Vitest + Testing Library（jsdom，仅 mock fetch/WebSocket）
 cd frontend && npm run test:coverage
 cd frontend && npm run test:e2e # Playwright（自动起 8021 桩后端 + 5174 Vite）
+
+# 本地 CI 镜像（等价 .github/workflows/ci.yml：后端 pytest+覆盖率门槛、前端 lint/build/vitest、E2E）
+bash scripts/ci.sh
+CI_SKIP_E2E=1 bash scripts/ci.sh   # 跳过浏览器端
+CI_SKIP_COVERAGE=1 bash scripts/ci.sh  # 跳过后端覆盖率门槛
 ```
 
 模型配置：复制 `.env.example` 为项目根 `.env`，填 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（OpenAI 兼容接口）。`ProviderConfig.from_env()` 会自动加载项目根 `.env`（不覆盖已显式 export 的变量）。未配置时应用可启动，讨论功能返回配置提示。注意：`build_settings` 必须逐键点路径合并（`set_settings(f"{ns}.{k}", v)`）——直接传 settings model 会整体替换 Agently 插件命名空间、丢失 path_mapping/content_mapping 默认值。测试默认使用模拟模型（传输边界注入），不依赖真实 API。
@@ -90,6 +95,7 @@ Spec 驱动 + TDD，规则详见 `spec/README.md`：
 - 四层金字塔：方法层（`stats`/`profiler`/`plotting`）→ 编排层（`SessionService`/`AnalysisWorkflow`，注入假模型）→ 契约层（TestClient REST + WebSocket）→ 前端层（Vitest + RTL，仅 mock `fetch`/`WebSocket`）+ Playwright（`backend/tests/e2e_app.py` 桩模型后端）。
 - 测试隔离：`backend/tests/conftest.py` 提供 `data_root`/`app`/`client`/`session_id`/`sample_df` 与自动清场；`create_app(data_root=...)` 注入 `app.state.data_root`，`SessionManager.clear()` 清场。**测试不得写真实 `backend/data`，也不得依赖 `.env`。**
 - 真模型用例只放 `tests/test_real_llm_smoke.py`，`MEDSTA_REAL_LLM=1` 才运行（已注册 `real_llm` marker），默认 skip。
+- CI：`.github/workflows/ci.yml` 三作业（backend/frontend/e2e）；后端 `pytest-cov` 门槛 83%（2026-10-21 实测 88.19% −5pt，调整时同步 `scripts/ci.sh` 的 `COVERAGE_MIN`）；E2E 安装 `fonts-noto-cjk` 并缓存 Chromium；分支保护需在 GitHub 后台手动开启。
 - 评估基线：`docs/evaluation-report.md`（G0–G7 门禁与决策板 A–D 差距矩阵、P0/P1/P2 建议）。
 
 ### 共同契约

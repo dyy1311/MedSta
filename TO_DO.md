@@ -33,12 +33,14 @@
 - [ ] `print` → `logging`（16 处），补 request/session id 与 `/metrics`
 - [ ] 前端路由级分包、错误边界、i18n；移除未使用依赖
 - [ ] 后端 `ruff` + `mypy`；数值告警显式处理
-- [ ] CI：pytest + vitest + playwright（缓存浏览器）+ 覆盖率门槛 + OpenAPI/WS 契约测试 + hypothesis 属性测试
+- [x] CI：pytest + vitest + playwright（缓存浏览器）+ 后端覆盖率门槛 83%（spec 021）
+- [ ] OpenAPI/WS 契约自动生成 + hypothesis 属性测试
 
 ## 已完成
 
 | 任务 | 完成日期 | 产出 |
 |---|---|---|
+| CI 流水线（021） | 2026-10-21 | GitHub Actions 三作业（backend/frontend/e2e）；后端覆盖率 88.19%，门槛 83%；本地镜像 `scripts/ci.sh`；首次 CI 运行 success（run 39571533398）；分支保护待手动配置 |
 | 正确性护栏（020） | 2026-10-21 | 整数测量变量识别（年龄/血压→连续）、Logistic 分离检测（拒绝溢出 OR）、`PROTOCOL_UNSUPPORTED` 错误码、类型确认卡「数值列全部设为连续」；后端 200 collected、前端 35 passed |
 | 全链路测试体系（019） | 2026-10-21 | 后端 195 collected（1 项真模型 skip）、前端 34 passed（覆盖率 88.61%）、E2E 2 passed；新增 129 项用例；修复 10 类缺陷（工作区报告不可见、交付态按钮、上传错误静默、WS 类型校验、group_compare >2 组等）；`docs/evaluation-report.md` |
 | 项目初始化（001–007） | 2026-10-17 | 后端骨架、数据解析、讨论智能体、pipeline、会话 API、前端 SPA、真实模型接入修复 |
@@ -59,3 +61,4 @@
 - 无上传大小/行数限额；解析在主事件循环同步执行。
 - 无结果解释（自然语言结论）生成；交付为表格、图表与策略链。
 - Logistic 分离目前「拒绝输出」，未提供 Firth 惩罚回归；共线性仅通过系数/收敛间接暴露。
+- 分支保护（要求 CI 必过才能合并）需在 GitHub 仓库设置中手动开启；CI 不接入真实模型，`real_llm` 保持默认 skip。

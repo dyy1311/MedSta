@@ -24,5 +24,6 @@
 | 2026-10-18 | 011 选项与能力披露 | done | AnalysisPlan.options（宿主保证 confirm/唯一/≤4）；工具目录注入 info；GET /capabilities（方法+参数+图表+planned）；WS option 路由；前端能力抽屉/选项按钮/自定义补充输入/流式气泡/中断按钮/错误卡；npm build 通过 |
 | 2026-10-18 | 009–011 端到端验证 | done | 真实模型：分组比较+相关分析方案（4 选项）→ 进度 1/2、2/2 → 2 张图表交付；图表无缺字告警；74 项测试全绿 |
 | 2026-10-17 | — | 待办 | WebSocket 断线重连；多会话历史回放；结果解释功能（模型生成文字解读，当前仅图表+数据） |
+| 2026-10-21 | 021 CI 流水线 | implementing → done | git init + 首次提交 `316b103` 推送 main；GitHub Actions 三作业（backend 覆盖率 88.19%/门槛 83%、frontend、e2e 装 fonts-noto-cjk + 缓存 Chromium）；本地 `scripts/ci.sh` 全量通过，负向校验 `COVERAGE_MIN=99` 退出码 1 且立即中断；首次 Actions run `39571533398` 三作业 success；分支保护待 GitHub 后台手动开启 |
 | 2026-10-21 | 020 正确性护栏 | implementing → done | 整数测量变量按列名词元/中文子串 + 跨度规则判 continuous（年龄/血压），0/1 与评分分级保持 ordinal；Logistic 三重分离检测（未收敛 / max\|β\|≥15 / OR 非有限）拒绝输出并给出 Firth 建议，替换准分离测试夹具；新增 `PROTOCOL_UNSUPPORTED`；类型确认卡「数值列全部设为连续」；后端 200 collected、前端 35 passed、E2E 2 passed |
 | 2026-10-21 | 019 全链路测试体系 | implementing → done | 四层测试金字塔（后端 195 collected / 前端 34 / E2E 2；前端覆盖率 88.61%）；测试隔离改造（数据根请求期解析 + app.state 注入 + manager.clear + conftest）；修复 10 类缺陷（工作区报告不可见、delivered 不更新卡片、上传错误静默、WS 类型未校验、未知会话崩溃、空文件 500、BOM 污染、pie 未披露、group_compare >2 组静默丢弃、数据根未隔离）；产出 `docs/evaluation-report.md`（G0–G7 与决策板 A–D 差距矩阵 + P0/P1/P2 建议） |

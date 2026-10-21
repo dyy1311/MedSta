@@ -1,7 +1,11 @@
 # 021 - CI 流水线接入
 
-> 状态：implementing
-> 创建：2026-10-21 ｜ 敲定：2026-10-21 ｜ 完成：—
+> 状态：done
+> 创建：2026-10-21 ｜ 敲定：2026-10-21 ｜ 完成：2026-10-21
+>
+> 落地结果：B1–B7 全绿。首次提交 `316b103` 已推送 `origin/main`；
+> GitHub Actions run `39571533398` 的 backend/frontend/e2e 三作业均 success。
+> 后端语句覆盖率 88.19%，门槛 83%；本地 `scripts/ci.sh` 全量通过，负向校验（门槛调至 99）退出码 1。
 
 ## 背景与目标
 
@@ -18,13 +22,13 @@ spec 019 建立了 231 项自动化测试，spec 020 增加了正确性护栏，
 
 ## 行为列表（TDD 循环队列）
 
-- [ ] B1: 首次提交只包含源码/配置/文档；`.env`、`backend/data/`、`node_modules/`、`frontend/dist/`、`coverage/`、`test-results/` 均未入库
-- [ ] B2: `scripts/ci.sh` 依次执行后端 pytest、前端 lint/build/vitest、E2E；任一步失败立即以非零码退出
-- [ ] B3: `CI_SKIP_E2E=1` 时脚本跳过 E2E，其余步骤照常执行
-- [ ] B4: `.github/workflows/ci.yml` 可被 PyYAML 解析，含 `backend`/`frontend`/`e2e` 三个 job，触发 push(main)/pull_request/workflow_dispatch，同分支并发取消
-- [ ] B5: `backend` job 以 `--cov-fail-under=<门槛>` 运行 pytest，门槛 = 本地实测语句覆盖率向下取整后减 5
-- [ ] B6: `e2e` job 安装 `fonts-noto-cjk` 与 Chromium 后运行 `npm run test:e2e`，失败上传 `playwright-report`/`test-results`
-- [ ] B7: `git push -u origin main` 成功后，远端 main 指向本地提交；Actions 首次运行结论可查询并记录
+- [x] B1: 首次提交只包含源码/配置/文档；`.env`、`backend/data/`、`node_modules/`、`frontend/dist/`、`coverage/`、`test-results/` 均未入库
+- [x] B2: `scripts/ci.sh` 依次执行后端 pytest、前端 lint/build/vitest、E2E；任一步失败立即以非零码退出
+- [x] B3: `CI_SKIP_E2E=1` 时脚本跳过 E2E，其余步骤照常执行
+- [x] B4: `.github/workflows/ci.yml` 可被 PyYAML 解析，含 `backend`/`frontend`/`e2e` 三个 job，触发 push(main)/pull_request/workflow_dispatch，同分支并发取消
+- [x] B5: `backend` job 以 `--cov-fail-under=<门槛>` 运行 pytest，门槛 = 本地实测语句覆盖率向下取整后减 5
+- [x] B6: `e2e` job 安装 `fonts-noto-cjk` 与 Chromium 后运行 `npm run test:e2e`，失败上传 `playwright-report`/`test-results`
+- [x] B7: `git push -u origin main` 成功后，远端 main 指向本地提交；Actions 首次运行结论可查询并记录
 
 ## 验收标准
 
