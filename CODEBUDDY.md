@@ -11,7 +11,7 @@ mamba activate Sta
 # 后端依赖安装（pip 直连困难时加 -i https://pypi.tuna.tsinghua.edu.cn/simple）
 cd backend && pip install -e ".[dev]"
 
-# 运行全部后端测试（当前 200 collected：199 passed + 1 项真模型 skip）
+# 运行全部后端测试（当前 357 collected：356 passed + 1 项真模型 skip）
 cd backend && pytest
 
 # 运行单个测试
@@ -54,7 +54,7 @@ Spec 驱动 + TDD，规则详见 `spec/README.md`：
 2. spec 进入 implementing 的前提：行为列表可测、验收标准分类（硬门=确定性测试/软标=语义质量）、测试映射完成。
 3. implementing 中按行为列表垂直切片：一条行为 → 一个测试（先确认 RED）→ 最小实现（GREEN）→ 下一行为。禁止先写全部测试再写全部实现。测试走公共接口，仅模型调用与文件系统边界 mock。
 4. 未进 implementing 不写实现；行为未全绿不算完成；全绿后迁入 done。
-5. **每次变更必须同时**：在 `docs/timeline.md` 追加一行（日期/事项/动作/说明），并更新 `TO_DO.md` 的进行中与已完成清单；跨模块架构决策记入 `docs/design-notes.md`。三者缺一视为变更未完成。
+5. **每次变更必须同时**：在 `docs/timeline.md` **顶部**追加一行（`日期 ｜ 类型 ｜ 内容 ｜ 原因/依据`，类型限 `迁移/环境/规范/结构/选型/需求`，严格倒序；目录重组、规范变更、选型定稿、spec 回退必须留条目），并更新 `TO_DO.md` 的进行中与已完成清单；跨模块架构决策的完整推理记入 `docs/design-notes.md`。三者缺一视为变更未完成。
 
 ## 架构
 
@@ -71,16 +71,26 @@ Spec 驱动 + TDD，规则详见 `spec/README.md`：
 
 ### 模块结构（backend/src/medsta/）
 
-- `config.py`：ProviderConfig（自动加载项目根 .env）+ build_settings（逐键点路径合并 OpenAICompatible 配置，保留插件默认值）+ ModelGateway（request_structured，测试可注入 request_factory）
+- `config.py`：ProviderConfig（自动加载项目根 .env）+ InterpretConfig（解释开关与句数上限，`from_env` 读取 `MEDSTA_INTERPRET*`）+ build_settings（逐键点路径合并 OpenAICompatible 配置，保留插件默认值）+ ModelGateway（request_structured，测试可注入 request_factory）
 - `app.py`：create_app 工厂 + 模块级 app；挂载 routes_session/routes_data/ws 路由与 /data 静态目录（artifact 图表）
 - `api/`：REST（会话创建、数据上传）+ WebSocket `/ws/{session_id}` 薄封装（逻辑在 SessionService）
 - `session/manager.py`：会话状态机 `discussing → plan_confirmed → executing → delivered →（修正）→ discussing`（宿主确定性，非模型决策）；多工作区（datasets + active_dataset_id）
-- `session/service.py`：消息编排（chat/confirm_plan/chart_choice/review/option/workspace/interrupt/resume）——讨论生成方案（流式）、确认后出图配置暂停（chart_config→chart_choice）、执行审阅交付或修正回讨论；修正意见注入再讨论
-- `agents/discussion.py`：DiscussionAgent + AnalysisPlan/PlanStep 契约（方法与图表枚举、宿主校验目标列 ⊆ 画像列名）
+- `session/service.py`：消息编排（chat/confirm_plan/chart_choice/review/option/workspace/interrupt/resume）——讨论生成方案（流式）、确认后出图配置暂停（chart_config→chart_choice）、执行审阅交付或修正回讨论；修正意见注入再讨论；交付态 chat 转答疑（`answer`）、解释后台任务（步骤签名防串台，中断时取消）
+- `agents/discussion.py`：DiscussionAgent + AnalysisPlan/PlanStep 契约（方法与图表枚举、宿主校验目标列 ⊆ 画像列名）；`MethodType` 必须等于注册表键 ∪ `ALIASES`，由 `tests/test_method_contract.py` 守护（漏改会让模型输出被 pydantic 直接拒绝）
+- `agents/discussion.py`（029）：`EstimandSpec`/`IntercurrentEvent`（ICH E9(R1) 五要素）+ `sap_status_of(plan)` 纯函数；状态只有 `estimand_declared`/`exploratory`，**不得**写成 pre-specified 或确证性（由 `tests/test_estimand.py` 扫描前后端文案守护）
+- `agents/interpretation.py`：InterpretationAgent（interpret/answer）——宿主证据白名单（按方法取结论键，不传原始数据）+ 模型只写句子；因果断言硬门（否定语境豁免）、未核验数值软标、句数截断；`build_evidence` 为唯一证据出口
 - `data/parser.py`：CSV/xlsx 解析（不支持的扩展名抛 ValueError）
 - `data/profiler.py`：变量类型四槽位（continuous 连续 / ordinal 数值-等级 / categorical 类别 / index 序列索引，统计默认排除）推断 + 七列统计口径（count/mean/median/q25/q75/min/max）；整数列按「测量指标列名（词元/中文子串）→ 连续，非负且跨度≤10 → 等级，其余宽范围计数 → 连续」判定，0/1 仍为等级；`apply_column_type` 支持用户修正（视为敲定）；TableProfile.type_confirmed 为讨论前置门控
 - **前端语义约定**：会话 Tab=与 LLM 交互（讨论/方案/审阅操作摘要）；工作区 Tab=数据画像（类型可编辑下拉）、统计表交付（含 CSV/XLSX 导出）、图表；上传走工作区"+"直接导入
-- `stats/registry.py`：**统计方法单一真相源**——ToolSpec（方法/必填槽位/task/applicability 适用条件/允许图表/实现）、`validate_step`/`validate_plan`（含 rationale 必填校验）、`execute_step`、`tool_catalog`；新增方法只改注册表
+- `stats/registry.py`：**统计方法单一真相源**——ToolSpec（方法/必填槽位/task/applicability 适用条件/允许图表/实现）、`validate_step`/`validate_plan`（含 rationale 必填校验）、`execute_step`（兜底挂 `method_note`）、`tool_catalog`；新增方法只改注册表
+- `stats/descriptive.py`（023）：`classify_distribution` 分布四态判定（insufficient/normal/log_normal/skewed）→ 推荐 x̄±s / M(P25~P75) / G；`descriptive_stats`（sd/CV/IQR/极差/众数/偏度/几何均数）；`reference_range`（正态法/百分位数法/对数正态法 × 90/95/99 × 单双侧）
+- `stats/notes.py`（023）：`METHOD_NOTES` 教材口径文案单一源（章节与公式、适用条件、解读禁忌），随结果下发并在审阅卡折叠展示
+- `stats/inference.py`（024/025）：`one_sample_test`（t/Wilcoxon + μ0 + 单双侧）、`randomized_block_anova`（SS 三分解）、`mcnemar_test`（配对四格表）、`factorial_anova`（两因素 + 交互，平衡正交分解 / 不平衡 Type II）、`repeated_measures_anova`（单因素组内，未做球形性校正）、`sample_size`（六种设计 × n/power，设计期工具，无目标列）
+- `stats/significance.py`（024/025）：`snk_q_pvalue`（studentized range 动态 span）、`snk_step_down`（逐步规则）、`tukey_q_pvalue`（k 固定）、`lsd_t_pvalue`、`scheffe_pvalue`、`dunn_pvalue`、`bonferroni_alpha`
+- 事后比较统一挂在 `anova.correction`（snk/tukey/dunnett/lsd/scheffe/holm/bonferroni），Dunnett 需 `control_group`；Kruskal 路径忽略参数事后退回 Dunn
+- `stats/impute.py`（028）：`missing_pattern`（univariate/monotonic/arbitrary）、`mechanism_hint`（分组差异提示，不给判定）、`impute_mice`（m 次不同种子取均值 + 插补间方差）、`impute_simple`（median/mean/locf，仅敏感性）、`delta_scan`；产出 `imputed_step.csv` 供 service 注册数据集。依赖 `scikit-learn>=1.3`（必需），`IterativeImputer` 必须先 `from sklearn.experimental import enable_iterative_imputer`
+- `stats/survival.py`（027）：`km_estimate`（教材 §14-2 排序规则 + Greenwood SE + CI 截断 + 中位生存期插值）、`logrank_test`（多组 g−1 维二次型，Breslow 以 n_i 加权）、`cox_fit`（PHReg + 手建零模型算 LR + Schoenfeld）、`rmst`（梯形积分）；竞争风险与 Fine–Gray 标 planned
+- `ChartType` 必须等于 `CHART_TYPES`，由 `tests/test_method_contract.py` 守护（与 `MethodType` 同理）
 - `stats/methods.py`：12 类确定性实现；检验策略链（正态性→Levene→失衡→最优/次优；卡方期望频数→Fisher 降级）输出 `strategy{steps[],final_method,alternative}`；anova ≥3 组输出 overall+pairwise（Holm/Bonferroni 校正）+ 多重性提醒
 - `stats/significance.py`：significance_label（α 判定+星号）、p_adjust（holm/bonferroni）
 - `stats/plotting.py`：CJK 字体检测与英文回退、11 类图表渲染（含 pie、显著性比较线标注）、render_combined 拼图
@@ -101,3 +111,5 @@ Spec 驱动 + TDD，规则详见 `spec/README.md`：
 ### 共同契约
 
 `AnalysisPlan`（chat 下发 plan 事件）、WS 消息契约（`spec/done/006-session-api.md`）与 ExecutionReport 是前后端与测试的共同契约，改动需同步更新契约测试与前端 `types.ts`。
+
+结果解释相关（022）：`interpretation` 事件在 `review_request` 之后异步推送（失败静默不推 error），`answer` 事件仅在 `delivered` 态回答 chat；该态下 `chat` 不产 plan、`review revise` 回讨论。开关 `MEDSTA_INTERPRET=0`，句数 `MEDSTA_INTERPRET_MAX_SENTENCES`（默认 1，clamp 1–5）。
