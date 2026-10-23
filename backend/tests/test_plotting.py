@@ -24,7 +24,17 @@ CHART_CASES = [
     ("qq_plot", "normality_test", ["value"], {}),
     ("residual_plot", "regression", ["value"], {"target": "value", "features": ["age"]}),
     ("pie", "describe", ["group"], {}),
+    ("survival_curve", "survival_analysis", ["visit"], {}),
 ]
+
+_SURVIVAL_RESULT = {
+    "time_column": "visit",
+    "points": [
+        {"time": 1.0, "survival": 0.9, "censored": 0},
+        {"time": 2.0, "survival": 0.75, "censored": 1},
+        {"time": 3.0, "survival": 0.5, "censored": 0},
+    ],
+}
 
 
 def _step(chart: str, method: str, targets: list[str], params: dict) -> PlanStep:
@@ -50,9 +60,10 @@ def test_every_chart_type_renders_valid_png(sample_df, tmp_path) -> None:
     """B14: 11 类图表均产出可用的 PNG（文件名含类型、>1KB、无缺字警告）。"""
     for index, (chart, method, targets, params) in enumerate(CHART_CASES):
         step = _step(chart, method, targets, params)
+        extra = _SURVIVAL_RESULT if chart == "survival_curve" else None
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            path = plotting.render_chart(sample_df, step, tmp_path, index)
+            path = plotting.render_chart(sample_df, step, tmp_path, index, result=extra)
 
         assert path.is_file(), chart
         assert path.name.endswith(f"_{chart}.png"), path.name

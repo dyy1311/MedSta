@@ -11,13 +11,23 @@ from typing import Any, Awaitable, Callable
 
 import pandas as pd
 
-from medsta.agents.discussion import AnalysisPlan, DiscussionAgent
+from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, sap_status_of
+from medsta.agents.interpretation import InterpretationAgent
+from medsta.config import InterpretConfig
 from medsta.data.profiler import VALID_COLUMN_TYPES, apply_column_type, profile_dataframe
 from medsta.errors import AppError, ErrorCode, ToolValidationError
 from medsta.pipeline.workflow import AnalysisWorkflow
 from medsta.session.manager import SessionStatus, manager
 
 SendFn = Callable[[dict], Awaitable[None]]
+
+
+def _step_signature(report: dict) -> tuple[tuple[str, str], ...]:
+    """报告指纹：解释返回时用于判断报告是否已被新执行覆盖。"""
+    return tuple(
+        (str(step.get("method", "")), str(step.get("title", "")))
+        for step in (report.get("steps") or [])
+    )
 
 
 class SessionService:
@@ -27,6 +37,8 @@ class SessionService:
         record_store: Any | None = None,
         data_root: str | pathlib.Path = "data/sessions",
         workflow_factory: Callable[[], AnalysisWorkflow] | None = None,
+        interpret_agent: InterpretationAgent | None = None,
+        interpret_config: InterpretConfig | None = None,
     ) -> None:
         self._agent = agent
         if record_store is None:
@@ -48,11 +60,24 @@ class SessionService:
         self._reports: dict[str, dict] = {}
         self._pending_chats: dict[str, str] = {}
         self._plans: dict[str, AnalysisPlan] = {}
+        self._requests: dict[str, str] = {}
+        self._interpret_agent = interpret_agent
+        self._interpret_config = interpret_config or InterpretConfig.from_env()
+        self._interpret_tasks: dict[str, asyncio.Task] = {}
 
     # ---- 装配与会话 ----
 
     def set_agent(self, agent: DiscussionAgent | None) -> None:
         self._agent = agent
+
+    def set_interpret_agent(
+        self,
+        agent: InterpretationAgent | None,
+        config: InterpretConfig | None = None,
+    ) -> None:
+        self._interpret_agent = agent
+        if config is not None:
+            self._interpret_config = config
 
     def create_session(self) -> str:
         return manager.create_session().session_id
@@ -98,14 +123,15 @@ class SessionService:
         return session.status.value
 
     async def wait_idle(self, session_id: str) -> None:
-        """等待该会话的后台生成任务结束（测试与关停时使用）。"""
-        task = self._tasks.get(session_id)
-        if task is None:
-            return
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        """等待该会话的后台任务（生成 / 答疑 / 解释）结束（测试与关停时使用）。"""
+        tasks = [self._tasks.get(session_id), self._interpret_tasks.get(session_id)]
+        for task in tasks:
+            if task is None:
+                continue
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     # ---- 消息编排 ----
 
@@ -179,6 +205,10 @@ class SessionService:
                 }
             )
             return
+        if session.status == SessionStatus.DELIVERED and self._interpret_agent is not None:
+            # 交付态默认答疑：不产新方案，避免用户追问被误当成重规划
+            await self._answer(session_id, str(event.get("content", "")), send)
+            return
         task = asyncio.create_task(
             self._generate_plan(session_id, str(event.get("content", "")), send)
         )
@@ -219,6 +249,7 @@ class SessionService:
                     raise
             assert plan is not None
             session.plan = plan
+            self._requests[session_id] = content
             manager.transition(session_id, SessionStatus.DISCUSSING)
             await send(
                 {
@@ -226,6 +257,8 @@ class SessionService:
                     "message": plan.message,
                     "steps": [step.model_dump() for step in plan.steps],
                     "options": [option.model_dump() for option in plan.options],
+                    "estimand": plan.estimand.model_dump() if plan.estimand else None,
+                    "sap_status": sap_status_of(plan),
                 }
             )
             await self._record(session_id, "user_message", {"content": content})
@@ -366,6 +399,8 @@ class SessionService:
             self._reports[session_id] = report
             print(f"[flow] review ready {session_id[:8]}", flush=True)
             await send({"type": "review_request", "report": report})
+            await self._register_imputed_datasets(session_id, report, send)
+            self._start_interpretation(session_id, report, session, send)
             suggestions = []
             for index, plan_step in enumerate(session.plan.steps):
                 step_report = report["steps"][index]
@@ -406,6 +441,156 @@ class SessionService:
                 ).to_event()
             )
 
+    async def _register_imputed_datasets(
+        self, session_id: str, report: dict, send: SendFn
+    ) -> None:
+        """把 impute 步骤产出的数据集注册到会话，并通知前端追加工作区（不切换 active）。"""
+        session = manager.get(session_id)
+        if session is None:
+            return
+        source_id = session.active_dataset_id
+        for index, step in enumerate(report.get("steps") or []):
+            payload = (step.get("result") or {}).get("imputed_dataset")
+            if not isinstance(payload, dict) or not payload.get("path"):
+                continue
+            path = pathlib.Path(str(payload["path"]))
+            if not path.exists():
+                print(f"[impute] missing csv {path}", flush=True)
+                continue
+            frame = pd.read_csv(path)
+            name = str(payload.get("name") or f"插补数据集 {index + 1}")
+            dataset_id = manager.attach_dataset(session_id, df=frame, name=name)
+            data = session.datasets.get(dataset_id)
+            await send(
+                {
+                    "type": "dataset_added",
+                    "dataset_id": dataset_id,
+                    "name": name,
+                    "profile": data.profile.model_dump() if data is not None else None,
+                    "imputed": True,
+                    "source_dataset_id": source_id,
+                }
+            )
+
+    # ---- 结果解释与答疑 ----
+
+    def _start_interpretation(
+        self, session_id: str, report: dict, session: Any, send: SendFn
+    ) -> None:
+        """后台生成解读：不阻塞 review_request，失败静默。"""
+        if not self._interpret_config.enabled or self._interpret_agent is None:
+            return
+        plan = self._plans.get(session_id)
+        data = getattr(session, "data", None)
+        if not isinstance(plan, AnalysisPlan) or data is None:
+            return
+        signature = _step_signature(report)
+        self._cancel_interpretation(session_id)
+        self._interpret_tasks[session_id] = asyncio.create_task(
+            self._interpret(session_id, report, plan, data.profile, signature, send)
+        )
+
+    async def _interpret(
+        self,
+        session_id: str,
+        report: dict,
+        plan: AnalysisPlan,
+        profile: Any,
+        signature: tuple[tuple[str, str], ...],
+        send: SendFn,
+    ) -> None:
+        agent = self._interpret_agent
+        if agent is None:
+            return
+        try:
+            result = await asyncio.to_thread(
+                agent.interpret,
+                report=report,
+                plan=plan,
+                profile=profile,
+                config=self._interpret_config,
+                user_request=self._requests.get(session_id, ""),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # 增强项失败不得影响交付
+            print(f"[interpret] failed {session_id[:8]} {type(exc).__name__}", flush=True)
+            return
+        if result is None:
+            print(f"[interpret] skipped {session_id[:8]}", flush=True)
+            return
+        current = self._reports.get(session_id)
+        if current is None or _step_signature(current) != signature:
+            print(f"[interpret] stale dropped {session_id[:8]}", flush=True)
+            return
+        try:
+            await send({"type": "interpretation", **result.model_dump()})
+            await self._record(session_id, "interpretation", result.model_dump())
+        except Exception as exc:
+            print(f"[interpret] send failed {session_id[:8]} {type(exc).__name__}", flush=True)
+
+    def _cancel_interpretation(self, session_id: str) -> None:
+        task = self._interpret_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _answer(self, session_id: str, question: str, send: SendFn) -> None:
+        """交付态答疑：只解释已交付结果，不产新方案、不改状态。"""
+        session = manager.get(session_id)
+        plan = self._plans.get(session_id)
+        report = self._reports.get(session_id)
+        if session is None or session.data is None or report is None or not isinstance(plan, AnalysisPlan):
+            await send(
+                AppError(
+                    ErrorCode.NO_ACTIVE_RUN,
+                    "没有可答疑的交付结果",
+                    hint="先完成一次分析并交付，再针对结果提问",
+                ).to_event()
+            )
+            return
+        await self._record(session_id, "user_message", {"content": question})
+        await send({"type": "progress", "stage": "answering", "message": "正在结合交付结果回答…"})
+        self._tasks[session_id] = asyncio.create_task(
+            self._answer_task(session_id, question, plan, report, session.data.profile, send)
+        )
+
+    async def _answer_task(
+        self,
+        session_id: str,
+        question: str,
+        plan: AnalysisPlan,
+        report: dict,
+        profile: Any,
+        send: SendFn,
+    ) -> None:
+        agent = self._interpret_agent
+        if agent is None:
+            return
+        try:
+            reply = await asyncio.to_thread(
+                agent.answer,
+                question=question,
+                report=report,
+                plan=plan,
+                profile=profile,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[answer] failed {session_id[:8]} {type(exc).__name__}", flush=True)
+            reply = None
+        if reply is None:
+            await send(
+                AppError(
+                    ErrorCode.MODEL_REQUEST_FAILED,
+                    "答疑暂时不可用",
+                    hint="可直接提出修正意见重新分析，或稍后重试",
+                ).to_event()
+            )
+            return
+        await send({"type": "answer", **reply.model_dump()})
+        await self._record(session_id, "answer", {"question": question, **reply.model_dump()})
+
     @staticmethod
     def _plot_options(plan_step: Any, df: pd.DataFrame | None = None) -> list[str]:
         # 按工具支持图与列类型给默认建议（首选排最前）。
@@ -429,6 +614,20 @@ class SessionService:
     async def _on_review(self, session_id: str, event: dict, send: SendFn) -> None:
         workflow = self._workflows.get(session_id)
         execution = self._executions.get(session_id)
+        session = manager.get(session_id)
+        if (
+            (workflow is None or execution is None)
+            and event.get("decision") == "revise"
+            and session is not None
+            and session.status == SessionStatus.DELIVERED
+        ):
+            # 交付后「调整分析方案」：回到讨论态，后续 chat 重新生成方案
+            self._cancel_interpretation(session_id)
+            manager.transition(session_id, SessionStatus.DISCUSSING)
+            await send(
+                {"type": "back_to_discussion", "message": "已回到方案讨论，请说明要调整的方向"}
+            )
+            return
         if workflow is None or execution is None:
             await send(
                 AppError(
@@ -548,7 +747,13 @@ class SessionService:
             )
             return
         step = plan.steps[index].model_copy(update={"chart_type": chart_type})
-        path = render_chart(session.data.df, step, _pathlib.Path(session.data.artifact_dir), index)
+        path = render_chart(
+            session.data.df,
+            step,
+            _pathlib.Path(session.data.artifact_dir),
+            index,
+            result=report["steps"][index].get("result"),
+        )
         report["steps"][index]["artifact"] = path.name
         report["steps"][index]["result"]["artifact"] = path.name
         self._reports[session_id] = report
@@ -588,6 +793,7 @@ class SessionService:
 
     async def _on_interrupt(self, session_id: str, event: dict, send: SendFn) -> None:
         task = self._tasks.pop(session_id, None)
+        self._cancel_interpretation(session_id)
         workflow = self._workflows.get(session_id)
         execution = self._executions.get(session_id)
         stage = "executing" if execution is not None else "thinking"

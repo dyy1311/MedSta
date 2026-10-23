@@ -17,11 +17,26 @@ export interface PlanOption {
   description?: string;
 }
 
+export interface IntercurrentEvent {
+  event: string;
+  strategy: string;
+}
+
+export interface EstimandSpec {
+  population: string;
+  variable: string;
+  treatment: string;
+  intercurrent_events: IntercurrentEvent[];
+  summary_measure: string;
+}
+
 export interface PlanEvent {
   type: "plan";
   message: string;
   steps: PlanStep[];
   options: PlanOption[];
+  estimand?: EstimandSpec | null;
+  sap_status?: string;
 }
 
 /** 变量类型四槽位 */
@@ -51,6 +66,19 @@ export interface TableProfile {
   type_confirmed: boolean;
 }
 
+export interface StepInterpretation {
+  step_index: number;
+  finding: string;
+  caveat: string;
+}
+
+export interface Interpretation {
+  summary: string;
+  steps: StepInterpretation[];
+  caveats: string[];
+  unverified_numbers: string[];
+}
+
 export interface ReportStep {
   title: string;
   method: string;
@@ -63,6 +91,7 @@ export interface ReportStep {
 
 export interface ExecutionReport {
   steps: ReportStep[];
+  interpretation?: Interpretation | null;
 }
 
 export interface AppErrorPayload {
@@ -77,6 +106,7 @@ export interface WorkspaceTab {
   name: string;
   profile: TableProfile;
   reports: ExecutionReport[];
+  imputed?: boolean;
 }
 
 export interface ChartConfigRequest {
@@ -144,6 +174,21 @@ export type WsEvent =
     }
   | PlanEvent
   | { type: "review_request"; report: ExecutionReport; updated?: boolean }
+  | ({ type: "interpretation" } & Interpretation)
+  | {
+      type: "answer";
+      answer: string;
+      caveats: string[];
+      unverified_numbers: string[];
+    }
+  | {
+      type: "dataset_added";
+      dataset_id: string;
+      name: string;
+      profile: TableProfile;
+      imputed: boolean;
+      source_dataset_id: string | null;
+    }
   | { type: "delivered"; report: ExecutionReport }
   | { type: "back_to_discussion"; message: string }
   | { type: "stream"; channel: string; delta: string }
@@ -173,5 +218,12 @@ export type ChatMessage =
       kind: "review";
       report: ExecutionReport;
       delivered: boolean;
+    }
+  | {
+      role: "system";
+      kind: "answer";
+      content: string;
+      caveats: string[];
+      unverified: string[];
     }
   | ({ role: "system"; kind: "error" } & AppErrorPayload);

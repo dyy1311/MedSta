@@ -31,6 +31,9 @@ blob-report/
 backend/data/
 *.sqlite3
 
+# 大文件（教材 PDF 31MB，仅本地参考，不入库）
+docs/*.pdf
+
 # IDE / 系统
 .idea/
 .vscode/

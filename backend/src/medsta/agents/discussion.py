@@ -17,7 +17,17 @@ from medsta.stats.registry import HARD_ISSUE_CODES, tool_catalog, validate_plan
 
 MethodType = Literal[
     "describe",
+    "descriptive_stats",
+    "reference_range",
+    "one_sample_test",
+    "randomized_block_anova",
+    "factorial_anova",
+    "repeated_measures_anova",
+    "mcnemar_test",
+    "sample_size",
+    "survival_analysis",
     "missing_report",
+    "impute",
     "normality_test",
     "levene_test",
     "group_compare",
@@ -32,7 +42,8 @@ MethodType = Literal[
 ]
 ChartType = Literal[
     "histogram", "boxplot", "violin", "scatter", "line",
-    "bar", "grouped_bar", "heatmap", "qq_plot", "residual_plot", "pie", "none",
+    "bar", "grouped_bar", "heatmap", "qq_plot", "residual_plot", "pie",
+    "survival_curve", "none",
 ]
 
 
@@ -60,15 +71,63 @@ class PlanOption(BaseModel):
     description: str = Field(default="", description="选项说明（可选）")
 
 
+SAP_STATUS_DECLARED = "estimand_declared"
+SAP_STATUS_EXPLORATORY = "exploratory"
+
+class IntercurrentEvent(BaseModel):
+    """伴发事件及其处理策略（ICH E9(R1) 五选一）。"""
+
+    event: str = Field(default="", description="伴发事件描述")
+    strategy: Literal[
+        "treatment-policy",
+        "hypothetical",
+        "composite",
+        "while-on-treatment",
+        "principal-stratum",
+    ] = Field(default="treatment-policy", description="处理策略")
+
+
+class EstimandSpec(BaseModel):
+    """估计目标五要素；字段全部允许留空，完整性由宿主判定。"""
+
+    population: str = Field(default="", description="目标人群")
+    variable: str = Field(default="", description="结局变量")
+    treatment: str = Field(default="", description="处理与对照")
+    intercurrent_events: list[IntercurrentEvent] = Field(
+        default_factory=list, description="伴发事件及策略；无伴发事件时为空列表"
+    )
+    summary_measure: str = Field(default="", description="群体水平汇总指标")
+
+
 class AnalysisPlan(BaseModel):
     message: str = Field(description="给用户的方案说明")
     steps: list[PlanStep] = Field(description="按执行顺序排列的分析步骤")
     options: list[PlanOption] = Field(
         default_factory=list, description="给用户的可选项（必须含 confirm）"
     )
+    estimand: EstimandSpec | None = Field(
+        default=None, description="估计目标；模型无法确定时可缺省"
+    )
 
     def method_summary(self) -> str:
         return " -> ".join(f"{s.title}({s.method})" for s in self.steps)
+
+
+def sap_status_of(plan: AnalysisPlan) -> str:
+    """宿主判定分析性质：四文本要素齐全才算「已声明估计目标」。
+
+    注意：即使齐全也不代表事前注册或 SAP 冻结，措辞不得写成确证性分析。
+    """
+    estimand = plan.estimand
+    if estimand is None:
+        return SAP_STATUS_EXPLORATORY
+    factors = (
+        estimand.population,
+        estimand.variable,
+        estimand.treatment,
+        estimand.summary_measure,
+    )
+    return SAP_STATUS_DECLARED if all(str(item).strip() for item in factors) else SAP_STATUS_EXPLORATORY
 
 
 _BASE_INSTRUCT = (
@@ -83,6 +142,11 @@ _BASE_INSTRUCT = (
     "6) 显著性规范：默认 α=0.05，多组两两比较将按 Holm 校正；如数据特征建议其他 α 或校正方式，在 message 中说明；\n"
     "7) options 给出 2–4 个行动选项，必须包含一个 action=confirm 的执行选项，"
     "可按需给出 revise（换方法）/explain（解释依据）/supplement（补充对话）；\n"
+    "8) 估计目标 Estimand（ICH E9(R1)，可选）：尽量给出 population（目标人群）、variable（结局变量）、"
+    "treatment（处理与对照）、intercurrent_events（伴发事件及策略：treatment-policy/hypothetical/"
+    "composite/while-on-treatment/principal-stratum）、summary_measure（群体水平汇总指标）；"
+    "无法从用户诉求与画像中确定时留空，禁止编造人群、干预与伴发事件；"
+    "summary_measure 须与所选方法一致（均值差对应 t/ANOVA，HR 对应 Cox，率差对应卡方）；\n"
     "message 用简体中文说明方案思路、预期产出与显著性判断建议。"
 )
 
@@ -96,6 +160,13 @@ _OUTPUT_FIELDS = {
     "options": (
         list,
         "行动选项数组，每项含 id(str, 唯一)/label(str)/action(confirm|revise|explain|custom|supplement)/description(str)",
+    ),
+    "estimand": (
+        object,
+        "可选：估计目标五要素。population(str 目标人群)/variable(str 结局变量)/"
+        "treatment(str 处理与对照)/intercurrent_events(list，每项含 event(str) 与 "
+        "strategy(treatment-policy|hypothetical|composite|while-on-treatment|principal-stratum))/"
+        "summary_measure(str 群体水平汇总指标)。无法确定时留空，不要编造",
     ),
 }
 

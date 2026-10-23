@@ -31,15 +31,26 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
     from agently.core.storage import LocalRecordStore
 
     from medsta.agents.discussion import DiscussionAgent
-    from medsta.config import build_gateway
+    from medsta.agents.interpretation import InterpretationAgent
+    from medsta.config import InterpretConfig, build_gateway
 
     root = data_root or pathlib.Path(os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
     record_store = LocalRecordStore(root=str(root.parent / "records"))
+    interpret_config = InterpretConfig.from_env()
     try:
-        agent: DiscussionAgent | None = DiscussionAgent(gateway=build_gateway())
+        gateway = build_gateway()
+        agent: DiscussionAgent | None = DiscussionAgent(gateway=gateway)
+        interpret_agent: InterpretationAgent | None = InterpretationAgent(gateway=gateway)
     except RuntimeError:
         agent = None
-    return SessionService(record_store=record_store, data_root=root, agent=agent)
+        interpret_agent = None
+    return SessionService(
+        record_store=record_store,
+        data_root=root,
+        agent=agent,
+        interpret_agent=interpret_agent,
+        interpret_config=interpret_config,
+    )
 
 
 def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:

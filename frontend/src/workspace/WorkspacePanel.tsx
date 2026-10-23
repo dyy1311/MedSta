@@ -63,6 +63,11 @@ export default function WorkspacePanel({
               }`}
             >
               {workspace.name}
+              {workspace.imputed && (
+                <span className="ml-1 rounded bg-warn/15 px-1 py-0.5 text-[10px] font-normal text-warn">
+                  已插补
+                </span>
+              )}
             </button>
           );
         })}
@@ -92,6 +97,11 @@ export default function WorkspacePanel({
           </div>
         ) : (
           <>
+            {active.imputed && (
+              <div className="rounded-lg border border-warn/30 bg-warn/8 p-2.5 text-xs leading-relaxed text-warn">
+                该数据集为 MICE 单数据集插补结果：缺失值已填补，但标准误偏小，不宜直接当作确证性结论；原始数据仍在其他标签页。
+              </div>
+            )}
             {active.profile && (
               <ProfileTable
                 profile={active.profile}

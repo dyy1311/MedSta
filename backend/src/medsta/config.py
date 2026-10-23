@@ -60,6 +60,31 @@ class ProviderConfig:
         )
 
 
+_INTERPRET_MAX_SENTENCES = 5
+
+
+@dataclass(frozen=True)
+class InterpretConfig:
+    """结果解释开关与粒度：宿主确定性配置，测试可显式注入。"""
+
+    enabled: bool = True
+    max_sentences: int = 1
+
+    def __post_init__(self) -> None:
+        clamped = max(1, min(_INTERPRET_MAX_SENTENCES, int(self.max_sentences)))
+        object.__setattr__(self, "max_sentences", clamped)
+
+    @classmethod
+    def from_env(cls) -> "InterpretConfig":
+        raw = os.environ.get("MEDSTA_INTERPRET", "1").strip().lower()
+        enabled = raw not in {"0", "false", "off", "no"}
+        try:
+            limit = int(os.environ.get("MEDSTA_INTERPRET_MAX_SENTENCES", "1"))
+        except ValueError:
+            limit = 1
+        return cls(enabled=enabled, max_sentences=limit)
+
+
 def build_settings(config: ProviderConfig, agently_facade: Any | None = None) -> Any:
     """把 provider 配置写入 Agently settings（OpenAICompatible，chat 端点族）。
 

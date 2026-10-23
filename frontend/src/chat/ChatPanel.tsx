@@ -5,6 +5,7 @@ import PlanCard from "./PlanCard";
 import ReviewCard from "./ReviewCard";
 import UploadZone from "./UploadZone";
 import ErrorCard from "./ErrorCard";
+import AnswerCard from "./AnswerCard";
 
 import AnalysisConfigCard from "./AnalysisConfigCard";
 import PlotSuggestCard from "./PlotSuggestCard";
@@ -137,8 +138,20 @@ export default function ChatPanel({
                 message={message.message}
                 steps={message.steps}
                 options={message.options ?? []}
+                estimand={message.estimand ?? null}
+                sapStatus={message.sap_status ?? "exploratory"}
                 confirming={confirming}
                 onOption={onOption}
+              />
+            );
+          }
+          if (message.kind === "answer") {
+            return (
+              <AnswerCard
+                key={index}
+                content={message.content}
+                caveats={message.caveats}
+                unverified={message.unverified}
               />
             );
           }
@@ -232,9 +245,11 @@ export default function ChatPanel({
               if (event.key === "Enter" && !event.nativeEvent.isComposing) submit();
             }}
             placeholder={
-              uploaded
-                ? "描述分析目标，或对方案提出修正意见…"
-                : "请先上传数据…"
+              !uploaded
+                ? "请先上传数据…"
+                : phase === "delivered"
+                  ? "针对结果提问，或点「调整分析方案」…"
+                  : "描述分析目标，或对方案提出修正意见…"
             }
             disabled={!uploaded || busy}
             className="min-w-0 flex-1 rounded-xl border border-ink/15 bg-surface-page px-4 py-2.5 text-sm outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"

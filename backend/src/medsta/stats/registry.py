@@ -13,12 +13,15 @@ import pandas as pd
 from pydantic import BaseModel
 
 from medsta.errors import ErrorCode
-from medsta.stats import methods
+from medsta.stats import descriptive, inference, methods, survival
+from medsta.stats import impute as impute_tool
+from medsta.stats.notes import METHOD_NOTES
 from medsta.stats.plotting import render_chart
 
 CHART_TYPES = (
     "histogram", "boxplot", "violin", "scatter", "line",
-    "bar", "grouped_bar", "pie", "heatmap", "qq_plot", "residual_plot", "none",
+    "bar", "grouped_bar", "pie", "heatmap", "qq_plot", "residual_plot",
+    "survival_curve", "none",
 )
 
 
@@ -64,18 +67,79 @@ class ToolSpec:
 _CATEGORY_DESCRIBE = "描述与质检"
 _CATEGORY_COMPARE = "组间比较"
 _CATEGORY_MODEL = "关联与预测"
+_CATEGORY_DESIGN = "研究设计"
+
+# 设计期工具不处理数据列，允许 target_columns 为空
+_NO_TARGET_TOOLS = {"sample_size"}
 
 _REGISTRY: dict[str, ToolSpec] = {
     "describe": ToolSpec(
         name="describe",
         title="描述性统计",
         category=_CATEGORY_DESCRIBE,
-        description="输出数值列的 n/均值/标准差/中位数/四分位，可按分组列分层描述",
+        description="输出数值列的 n/均值/中位数/四分位/极值，可按分组列分层描述（标准差、CV 与几何均数见 descriptive_stats）",
         params=(
             ToolParam("group_by", "column", "分组描述所用列（可选）", required=False),
         ),
         charts=("histogram", "boxplot", "violin", "pie"),
         handler=methods.describe,
+    ),
+    "descriptive_stats": ToolSpec(
+        name="descriptive_stats",
+        title="统计描述（按分布选指标）",
+        category=_CATEGORY_DESCRIBE,
+        description=(
+            "逐列输出 n/均值/标准差/变异系数/中位数/四分位/IQR/极差/众数/偏度/几何均数，"
+            "并判定分布形态推荐报告方式（x̄±s、M(P25~P75) 或 G）"
+        ),
+        params=(
+            ToolParam("group_by", "column", "分组描述所用列（可选）", required=False),
+        ),
+        charts=("histogram", "boxplot", "violin"),
+        handler=descriptive.descriptive_stats,
+    ),
+    "reference_range": ToolSpec(
+        name="reference_range",
+        title="医学参考值范围",
+        category=_CATEGORY_DESCRIBE,
+        description="正态法/百分位数法/对数正态法计算 90/95/99 医学参考值范围，支持双侧与单侧",
+        params=(
+            ToolParam("percentage", "choice", "百分数范围（%）", choices=("90", "95", "99"), default="95"),
+            ToolParam(
+                "sides", "choice", "单双侧（须由专业知识确定）",
+                choices=("two", "one_lower", "one_upper"), default="two",
+            ),
+            ToolParam(
+                "method", "choice", "计算方法；auto 按分布形态选择",
+                choices=("auto", "normal", "percentile", "log_normal"), default="auto",
+            ),
+        ),
+        charts=(),
+        handler=descriptive.reference_range,
+        accepts=("continuous",),
+    ),
+    "one_sample_test": ToolSpec(
+        name="one_sample_test",
+        title="单样本检验",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "样本均数与已知总体均数 μ0 比较：t 检验或 Wilcoxon 符号秩，"
+            "输出均数差与置信区间（教材 §7-1）"
+        ),
+        params=(
+            ToolParam("mu0", "number", "已知总体均数 μ0（必填）", required=True),
+            ToolParam(
+                "test", "choice", "检验方法；auto 按正态性选择",
+                choices=("auto", "t", "wilcoxon"), default="auto",
+            ),
+            ToolParam(
+                "sides", "choice", "单双侧；须在分析前确定",
+                choices=("two", "greater", "less"), default="two",
+            ),
+        ),
+        charts=("histogram", "boxplot"),
+        handler=inference.one_sample_test,
+        accepts=("continuous",),
     ),
     "missing_report": ToolSpec(
         name="missing_report",
@@ -87,6 +151,30 @@ _REGISTRY: dict[str, ToolSpec] = {
         ),
         charts=(),
         handler=methods.missing_report,
+    ),
+    "impute": ToolSpec(
+        name="impute",
+        title="缺失值插补",
+        category=_CATEGORY_DESCRIBE,
+        description=(
+            "MICE 链式方程插补（m 次取均值 + 插补间方差），或均值/中位数/LOCF（仅敏感性）；"
+            "MICE 会产出可继续分析的插补数据集"
+        ),
+        params=(
+            ToolParam(
+                "columns", "column_list", "需要插补的列（默认取 target_columns）", required=False
+            ),
+            ToolParam(
+                "method", "choice", "插补方法",
+                choices=("mice", "median", "mean", "locf"), default="mice",
+            ),
+            ToolParam("m", "integer", "MICE 插补次数（默认 20，上限 50）", default=20),
+            ToolParam("max_iter", "integer", "每次插补的迭代轮数（默认 10）", default=10),
+            ToolParam("delta", "number", "delta 敏感性扫描步长（可选）", required=False),
+        ),
+        charts=(),
+        handler=impute_tool.impute,
+        accepts=("continuous",),
     ),
     "normality_test": ToolSpec(
         name="normality_test",
@@ -127,9 +215,38 @@ _REGISTRY: dict[str, ToolSpec] = {
                 "test", "choice", "检验方法；auto 按正态性自动选择",
                 choices=("auto", "anova", "kruskal"), default="auto",
             ),
+            ToolParam(
+                "correction", "choice",
+                "事后两两比较：snk 逐步检验 / tukey 全族 / dunnett 多组对一对照 / "
+                "lsd 不校正 / scheffe 最保守 / holm / bonferroni",
+                choices=("snk", "tukey", "dunnett", "lsd", "scheffe", "holm", "bonferroni"),
+                default="snk",
+            ),
+            ToolParam(
+                "control_group", "string",
+                "Dunnett 的对照组组名（仅 correction=dunnett 时必填）",
+                required=False,
+            ),
         ),
         charts=("boxplot", "grouped_bar", "violin"),
         handler=methods.anova,
+        group_param="group_column",
+        accepts=("continuous",),
+    ),
+    "randomized_block_anova": ToolSpec(
+        name="randomized_block_anova",
+        title="随机区组方差分析",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "随机区组设计的处理效应与区组效应检验：SS总=SS处理+SS区组+SS误差，"
+            "输出两张 F 检验与误差均方（教材 §8-3）"
+        ),
+        params=(
+            ToolParam("group_column", "column", "处理因素列（必填）", required=True),
+            ToolParam("block_column", "column", "区组因素列（必填）", required=True),
+        ),
+        charts=("boxplot", "grouped_bar"),
+        handler=inference.randomized_block_anova,
         group_param="group_column",
         accepts=("continuous",),
     ),
@@ -141,21 +258,149 @@ _REGISTRY: dict[str, ToolSpec] = {
         params=(
             ToolParam("row_column", "column", "行变量（target_columns 仅 1 个时必填）"),
             ToolParam("col_column", "column", "列变量（target_columns 仅 1 个时必填）"),
-            ToolParam("correction", "boolean", "2×2 是否做连续性校正", default=True),
+            ToolParam(
+                "correction", "choice",
+                "2×2 连续性校正；auto 按教材三档自动判定",
+                choices=("auto", "yes", "no"), default="auto",
+            ),
+            ToolParam(
+                "comparison", "choice", "多个样本率两两比较方式",
+                choices=("all_pairs", "vs_control"), default="all_pairs",
+            ),
+            ToolParam(
+                "event_value", "string",
+                "率的分子取值（如「有效」）；不填则取列联表第一列",
+                required=False,
+            ),
         ),
         charts=("grouped_bar", "heatmap"),
         handler=methods.chi_square,
         accepts=("categorical", "ordinal"),
     ),
+    "factorial_anova": ToolSpec(
+        name="factorial_anova",
+        title="析因设计方差分析",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "两因素（A、B）及 A×B 交互的方差分析：平衡设计按 SS总=SS(A)+SS(B)+SS(AB)+SS误差 分解，"
+            "不平衡设计用 Type II 平方和"
+        ),
+        params=(
+            ToolParam("factor_a", "column", "因素 A（必填）", required=True),
+            ToolParam("factor_b", "column", "因素 B（必填）", required=True),
+            ToolParam(
+                "interaction", "choice", "是否纳入交互项",
+                choices=("yes", "no"), default="yes",
+            ),
+        ),
+        charts=("grouped_bar", "boxplot"),
+        handler=inference.factorial_anova,
+        accepts=("continuous",),
+    ),
+    "repeated_measures_anova": ToolSpec(
+        name="repeated_measures_anova",
+        title="重复测量方差分析",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "单因素重复测量：SS总=SS时间+SS受试者+SS误差；要求每受试者×时间点恰 1 个观测，"
+            "本实现未做球形性校正"
+        ),
+        params=(
+            ToolParam("subject_column", "column", "受试者 ID（必填）", required=True),
+            ToolParam("within_column", "column", "组内因素（时间/条件，必填）", required=True),
+        ),
+        charts=("line", "boxplot"),
+        handler=inference.repeated_measures_anova,
+        accepts=("continuous",),
+        applicability="每个受试者在每个时间点恰有 1 个观测；未做球形性校正，违反球形假设时需谨慎",
+    ),
+    "mcnemar_test": ToolSpec(
+        name="mcnemar_test",
+        title="配对四格表 McNemar 检验",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "配对设计两个二分类变量比较：χ²=(b−c)²/(b+c)，b+c<40 用校正公式；"
+            "只考察不一致格，不能转为独立样本卡方（教材 §9-2）"
+        ),
+        params=(
+            ToolParam("row_column", "column", "方法 A（行变量；target_columns 仅 1 个时必填）"),
+            ToolParam("col_column", "column", "方法 B（列变量；target_columns 仅 1 个时必填）"),
+        ),
+        charts=("grouped_bar",),
+        handler=inference.mcnemar_test,
+        accepts=("categorical", "ordinal"),
+    ),
+    "survival_analysis": ToolSpec(
+        name="survival_analysis",
+        title="生存分析",
+        category=_CATEGORY_COMPARE,
+        description=(
+            "时间-事件资料：Kaplan-Meier 曲线与中位生存期、log-rank/Breslow 组间比较、"
+            "Cox 比例风险回归（HR 与 95%CI）、RMST（教材 §14）"
+        ),
+        params=(
+            ToolParam("time_col", "column", "随访时间列（必填，非负）", required=True),
+            ToolParam("event_col", "column", "事件指示列（必填，1=事件、0=删失）", required=True),
+            ToolParam("group_col", "column", "分组变量（log-rank 与分组 KM 必填）", required=False),
+            ToolParam("covariates", "column_list", "Cox 协变量列（cox 时必填）", required=False),
+            ToolParam(
+                "method", "choice", "分析方法；auto 按参数自动选择",
+                choices=("auto", "km", "logrank", "cox"), default="auto",
+            ),
+            ToolParam(
+                "test", "choice", "组间比较方法",
+                choices=("logrank", "breslow"), default="logrank",
+            ),
+            ToolParam("tau", "number", "RMST 的截断时间（默认各组最大随访最小值）", required=False),
+        ),
+        charts=("survival_curve",),
+        handler=survival.survival_analysis,
+        accepts=("continuous",),
+    ),
+    "sample_size": ToolSpec(
+        name="sample_size",
+        title="样本量与检验效能",
+        category=_CATEGORY_DESIGN,
+        description=(
+            "设计期工具：单样本、两独立均数、配对均数、两独立率、单因素方差分析、相关六种设计，"
+            "支持「给定参数求样本量」与「给定样本量求效能」双向求解；不需要数据列"
+        ),
+        params=(
+            ToolParam(
+                "design", "choice", "设计类型",
+                choices=(
+                    "one_mean", "two_means", "paired_means",
+                    "two_proportions", "anova", "correlation",
+                ),
+                default="two_means",
+            ),
+            ToolParam("solve", "choice", "求解目标：n 求样本量 / power 求效能",
+                      choices=("n", "power"), default="n"),
+            ToolParam("effect_size", "number",
+                      "标准化效应量（d/f/h 或 Fisher z）；缺失时用 delta/sigma 换算",
+                      required=False),
+            ToolParam("delta", "number", "最小临床意义差值（可选）", required=False),
+            ToolParam("sigma", "number", "标准差（可选，与 delta 配合）", required=False),
+            ToolParam("alpha", "number", "检验水准（默认 0.05）", default=0.05),
+            ToolParam("power", "number", "目标检验效能（默认 0.8）", default=0.8),
+            ToolParam("n", "integer", "每组样本量（solve=power 时必填）", required=False),
+            ToolParam("ratio", "number", "两组样本量比（默认 1）", default=1.0),
+            ToolParam("k_groups", "integer", "方差分析的组数（默认 3）", default=3),
+        ),
+        charts=(),
+        handler=inference.sample_size,
+        min_rows=0,
+    ),
     "correlation": ToolSpec(
         name="correlation",
         title="相关性分析",
         category=_CATEGORY_MODEL,
-        description="Pearson/Spearman 相关矩阵与两两 p 值（至少 2 个数值列）",
+        description="Pearson/Spearman/Kendall 相关矩阵与两两 p 值（至少 2 个数值列）",
         params=(
             ToolParam(
-                "method", "choice", "相关系数类型",
-                choices=("pearson", "spearman"), default="pearson",
+                "method", "choice",
+                "相关系数类型：Pearson 要求双变量正态；Spearman 用于单调关系；Kendall 用于有序数据且 ties 较多",
+                choices=("pearson", "spearman", "kendall"), default="pearson",
             ),
         ),
         charts=("heatmap", "scatter"),
@@ -203,6 +448,16 @@ _REGISTRY: dict[str, ToolSpec] = {
 
 _TASK_META = {
     "describe": ("描述", "任何分析的第一步：数值/类别列的分布概览，可按分组对比基线特征"),
+    "descriptive_stats": ("描述", "需要完整描述并判断分布形态时使用：比 describe 多标准差、变异系数、几何均数与 IQR"),
+    "reference_range": ("描述", "临床参考值范围估计：须明确单双侧与百分数；偏态资料用百分位数法"),
+    "one_sample_test": ("关联", "样本均数与已知总体均数 μ0 比较；需提供 μ0，单双侧须分析前确定"),
+    "randomized_block_anova": ("关联", "随机区组设计：同一区组内条件相近，需分离区组效应；要求每单元 1 个观测"),
+    "mcnemar_test": ("关联", "配对设计的两个二分类变量比较（同一对象两种方法）；不能当作独立样本卡方"),
+    "factorial_anova": ("关联", "两个分类因素对连续结局的影响：需同时看主效应与交互；交互显著时主效应不可直接解释"),
+    "repeated_measures_anova": ("关联", "同一对象多个时间点/条件的比较：需长表且每受试者×时间点唯一；未做球形性校正"),
+    "sample_size": ("设计", "研究开始前：给定效应量与目标效能求样本量，或评估现有样本的检验效能；不需要数据"),
+    "survival_analysis": ("预测", "随访资料：结局是「事件发生时间」且含删失，不能按普通均值比较处理"),
+    "impute": ("描述", "缺失处理：先诊断模式与机制提示，再决定完整病例/MICE/敏感性分析；单数据集插补不等于多重插补"),
     "missing_report": ("描述", "任何数据接入后必做：用于缺失机制判定（MCAR/MAR/MNAR）与数据契约确认"),
     "normality_test": ("描述", "参数/非参数方法选择的前置检验；n<3 或 n>5000 时结论需谨慎"),
     "levene_test": ("关联", "组间比较前置：判断方差齐性，决定 t/ANOVA 是否需要 Welch 校正"),
@@ -217,7 +472,17 @@ _TASK_META = {
 }
 _SLOT_META = {
     "describe": ("",),
+    "descriptive_stats": ("value_col", "group_col"),
+    "reference_range": ("value_col",),
+    "one_sample_test": ("value_col",),
+    "randomized_block_anova": ("group_col", "block_col", "value_col"),
+    "mcnemar_test": ("row_col", "col_col"),
+    "factorial_anova": ("factor_a", "factor_b", "value_col"),
+    "repeated_measures_anova": ("subject_col", "within_col", "value_col"),
+    "sample_size": ("",),
+    "survival_analysis": ("time_col", "event_col", "group_col", "covariates"),
     "missing_report": ("",),
+    "impute": ("value_col",),
     "normality_test": ("value_col",),
     "levene_test": ("group_col", "value_col"),
     "group_compare": ("group_col", "value_col"),
@@ -323,6 +588,13 @@ def tool_catalog() -> list[dict]:
     ]
 
 
+def _choice_str(value: Any) -> str:
+    """choice 参数的字符串归一化：布尔旧值映射为 yes/no（如 chi_square.correction）。"""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
+
+
 def _column_names(df_or_columns: Any) -> list[str]:
     from medsta.data.profiler import TableProfile
 
@@ -398,7 +670,7 @@ def validate_step(
                 f"步骤「{step.title}」引用了不存在的列：{column}",
                 f"数据现有列：{', '.join(columns[:12])}",
             )
-    if not step.target_columns:
+    if not step.target_columns and spec.name not in _NO_TARGET_TOOLS:
         add(ErrorCode.INVALID_PARAM, f"步骤「{step.title}」至少需要一个目标列")
 
     if step.chart_type != "none" and step.chart_type not in spec.charts:
@@ -437,7 +709,7 @@ def validate_step(
                         f"参数 {param.name} 含不存在的列：{', '.join(map(str, unknown))}",
                         f"数据现有列：{', '.join(columns[:12])}",
                     )
-        elif param.type == "choice" and param.choices and value not in param.choices:
+        elif param.type == "choice" and param.choices and _choice_str(value) not in param.choices:
             add(
                 ErrorCode.INVALID_PARAM,
                 f"参数 {param.name} 取值非法：{value}",
@@ -551,6 +823,9 @@ def normalize_params(spec: ToolSpec, step: Any) -> dict:
     for param in spec.params:
         if params.get(param.name) in (None, "", []) and param.default is not None:
             params[param.name] = param.default
+        if param.type == "choice" and params.get(param.name) is not None:
+            # 模型可能把 "95" 写成数字 95、把布尔当校正开关，统一归一化后再交给 handler
+            params[param.name] = _choice_str(params[param.name])
     return params
 
 
@@ -564,7 +839,11 @@ def execute_step(
     if spec is None:
         raise ValueError(f"未知统计方法：{step.method}")
     params = normalize_params(spec, step)
+    # 内部保留键：需要落盘产物的 handler（如 impute）据此写文件，模型不可填写
+    params["_artifact_dir"] = str(pathlib.Path(artifact_dir))
     result = spec.handler(df, step, params)
+    # 单一入口兜底：新增方法只要登记 METHOD_NOTES 就自动带教材口径说明
+    result.setdefault("method_note", METHOD_NOTES.get(spec.name, ""))
     artifact: str | None = None
     if step.chart_type != "none":
         path = render_chart(df, step, pathlib.Path(artifact_dir), index, result=result)

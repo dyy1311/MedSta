@@ -66,6 +66,31 @@ export default function App() {
     const isActive = ownerSid === activeChatIdResolved;
     const emit = (message: ChatMessage) => pushMessage(ownerSid, message);
     switch (event.type) {
+      case "dataset_added": {
+        // 插补数据集：追加工作区但不切换 active，避免打断用户当前查看的数据
+        const datasetId = event.dataset_id;
+        setWorkspaces((prev) => {
+          if (prev.some((item) => item.datasetId === datasetId)) return prev;
+          return [
+            ...prev,
+            {
+              datasetId,
+              name: event.name,
+              profile: event.profile,
+              reports: [],
+              imputed: event.imputed,
+            },
+          ];
+        });
+        if (isActive) {
+          emit({
+            role: "system",
+            kind: "notice",
+            content: `已生成插补数据集「${event.name}」，可在工作区标签页切换查看（当前未切换）。`,
+          });
+        }
+        break;
+      }
       case "data_profile": {
         const datasetId = event.dataset_id ?? `ds-${Date.now()}`;
         const name = event.name ?? datasetId;
@@ -146,6 +171,43 @@ export default function App() {
             emit({ role: "system", kind: "review", report: event.report, delivered: false });
           }
           forceRender((n) => n + 1);
+        }
+        break;
+      }
+      case "interpretation": {
+        // 解读补进最后一条审阅卡：不新增消息，不污染历史卡片
+        setMessagesBySession((prev) => {
+          const list = prev[ownerSid] ?? [];
+          const lastIndex = list.map((item) => item.kind).lastIndexOf("review");
+          const last = list[lastIndex];
+          if (lastIndex < 0 || last?.kind !== "review") return prev;
+          const next = [...list];
+          next[lastIndex] = {
+            ...last,
+            report: {
+              ...last.report,
+              interpretation: {
+                summary: event.summary,
+                steps: event.steps,
+                caveats: event.caveats,
+                unverified_numbers: event.unverified_numbers,
+              },
+            },
+          };
+          return { ...prev, [ownerSid]: next };
+        });
+        break;
+      }
+      case "answer": {
+        if (isActive) {
+          emit({
+            role: "system",
+            kind: "answer",
+            content: event.answer,
+            caveats: event.caveats,
+            unverified: event.unverified_numbers,
+          });
+          setPhaseFor(ownerSid, "delivered");
         }
         break;
       }
@@ -334,7 +396,12 @@ export default function App() {
   const handleAccept = () => sendWs({ type: "review", decision: "accept" });
   const handleRevise = (note: string) => {
     if (!activeChatIdResolved) return;
-    pushMessage(activeChatIdResolved, { role: "user", kind: "text", content: `修正意见：${note}` });
+    if (note) {
+      pushMessage(activeChatIdResolved, { role: "user", kind: "text", content: `修正意见：${note}` });
+    } else {
+      // 交付态「调整分析方案」：只请求回到讨论，不产生空修正意见
+      setPhaseFor(activeChatIdResolved, "idle");
+    }
     sendWs({ type: "review", decision: "revise", content: note });
   };
   const handleInterrupt = () => sendWs({ type: "interrupt" });

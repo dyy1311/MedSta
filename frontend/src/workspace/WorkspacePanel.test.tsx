@@ -100,6 +100,37 @@ describe("WorkspacePanel", () => {
     expect(onSetColumnType).toHaveBeenCalledWith("value", "index");
   });
 
+  it("事后比较表新增 method 列可正常渲染", () => {
+    const report: ExecutionReport = {
+      steps: [
+        {
+          title: "多组比较",
+          method: "anova",
+          status: "success",
+          artifact: null,
+          table: {
+            columns: ["group_a", "group_b", "mean_diff", "q_value", "method", "p_value"],
+            rows: [
+              {
+                group_a: "A",
+                group_b: "B",
+                mean_diff: 2.0,
+                q_value: 3.2,
+                method: "tukey",
+                p_value: 0.01,
+              },
+            ],
+          },
+          result: {},
+        },
+      ],
+    };
+    render(<WorkspacePanel {...baseProps} workspaces={[workspace({ reports: [report] })]} />);
+
+    expect(screen.getByText("method")).toBeInTheDocument();
+    expect(screen.getByText("tukey")).toBeInTheDocument();
+  });
+
   it("多次执行的表格按顺序保留，且交错渲染", () => {
     const secondReport: ExecutionReport = {
       steps: [

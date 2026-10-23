@@ -71,7 +71,7 @@ test("能力抽屉与上传失败提示（真实前后端契约）", async ({ pa
   await page.getByRole("button", { name: /能力/ }).click();
   await expect(page.getByText("统计能力披露")).toBeVisible();
   await expect(page.getByText("描述性统计")).toBeVisible();
-  await expect(page.getByText("生存分析")).toBeVisible();
+  await expect(page.getByText("生存分析", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭能力抽屉" }).click();
   await expect(page.getByText("统计能力披露")).toBeHidden();
 

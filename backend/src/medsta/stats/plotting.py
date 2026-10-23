@@ -37,6 +37,7 @@ CHART_LABELS = {
     "qq_plot": "Q-Q plot",
     "residual_plot": "residual plot",
     "pie": "pie",
+    "survival_curve": "survival curve",
 }
 
 
@@ -168,6 +169,43 @@ def render_chart(
                 ax.legend()
         ax.set_xlabel("index")
         ax.set_ylabel(columns[0])
+    elif chart == "survival_curve":
+        payload = result or {}
+        series: list[tuple[str, list]] = []
+        if isinstance(payload.get("groups"), dict):
+            series = [
+                (str(label), group.get("points") or [])
+                for label, group in payload["groups"].items()
+            ]
+        elif payload.get("points"):
+            series = [("overall", payload["points"])]
+        palette = ["#3B5BDB", "#E8590C", "#2F9E44", "#9775FA", "#F08C00", "#22B8CF"]
+        for offset, (label, points) in enumerate(series):
+            if not points:
+                continue
+            color = palette[offset % len(palette)]
+            step_times = [0.0] + [float(point["time"]) for point in points]
+            step_values = [1.0] + [float(point["survival"]) for point in points]
+            ax.step(step_times, step_values, where="post", color=color, label=label)
+            censored = [
+                (float(point["time"]), float(point["survival"]))
+                for point in points
+                if point.get("censored")
+            ]
+            if censored:
+                ax.plot(
+                    [item[0] for item in censored],
+                    [item[1] for item in censored],
+                    linestyle="none",
+                    marker="|",
+                    markersize=8,
+                    color=color,
+                )
+        ax.set_xlabel(str(payload.get("time_column") or "time"))
+        ax.set_ylabel("survival")
+        ax.set_ylim(0, 1.05)
+        if len(series) > 1:
+            ax.legend()
     elif chart == "bar":
         group_col = params.get("group_column")
         if group_col:
@@ -255,6 +293,8 @@ def summarize_series(series: pd.Series) -> dict[str, Any]:
 
 def default_chart_for(column_type: str, method: str = "") -> str:
     """按变量类型给出默认图表建议。"""
+    if method == "survival_analysis":
+        return "survival_curve"
     if column_type == "index":
         return "line"
     if column_type == "categorical":
