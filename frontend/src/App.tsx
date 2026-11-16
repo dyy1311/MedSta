@@ -5,7 +5,7 @@ import type {
   ChartConfigRequest, ChatMessage, ExecutionReport, Phase, PlotSuggestStep,
   TableProfile, TypeReviewRequest, WsEvent, WorkspaceTab,
 } from "./types";
-import { connectSession, createSession, updateColumnType, uploadData } from "./api/client";
+import { connectSession, createSession, updateColumnType, updateColumnTypes, uploadData } from "./api/client";
 import type { SessionConnection } from "./api/client";
 import ChatPanel from "./chat/ChatPanel";
 import CapabilityDrawer from "./chat/CapabilityDrawer";
@@ -396,6 +396,22 @@ export default function App() {
       .catch((error: unknown) => console.error("type edit failed", error));
   };
 
+  /** 批量列类型修改：一次请求多列，返回画像后更新对应工作区 */
+  const handleSetColumnTypes = (datasetId: string, types: Record<string, string>) => {
+    if (!activeChatIdResolved || Object.keys(types).length === 0) return;
+    updateColumnTypes(activeChatIdResolved, datasetId, types)
+      .then((result: { profile: TableProfile }) => {
+        setWorkspaces((prev) =>
+          prev.map((w) => (w.datasetId === datasetId ? { ...w, profile: result.profile } : w))
+        );
+      })
+      .catch((error: unknown) => {
+        console.error("batch type edit failed", error);
+        setBindingBanner(`批量修改失败：${error instanceof Error ? error.message : "未知错误"}`);
+        setTimeout(() => setBindingBanner(null), 4000);
+      });
+  };
+
   const sendWs = (event: Record<string, unknown>) => {
     if (connSessionRef.current === activeChatIdResolved) {
       connectionRef.current?.send(event);
@@ -587,6 +603,7 @@ export default function App() {
       onActivate={handleActivateWorkspace}
       onUpload={(file) => void handleUpload(file)}
       onSetColumnType={handleSetColumnType}
+      onSetColumnTypes={handleSetColumnTypes}
     />
   );
 

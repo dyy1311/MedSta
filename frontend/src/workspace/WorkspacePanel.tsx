@@ -18,6 +18,7 @@ interface Props {
   onActivate: (datasetId: string) => void;
   onUpload: (file: File) => void;
   onSetColumnType: (column: string, type: string) => void;
+  onSetColumnTypes?: (datasetId: string, types: Record<string, string>) => void;
 }
 
 export default function WorkspacePanel({
@@ -28,6 +29,7 @@ export default function WorkspacePanel({
   onActivate,
   onUpload,
   onSetColumnType,
+  onSetColumnTypes,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const active = workspaces.find((workspace) => workspace.datasetId === activeId) ?? workspaces[0];
@@ -134,6 +136,11 @@ export default function WorkspacePanel({
               <ProfileTable
                 profile={active.profile}
                 onSetColumnType={(column, type) => onSetColumnType(column, type)}
+                onSetColumnTypes={
+                  onSetColumnTypes
+                    ? (types) => onSetColumnTypes(active.datasetId, types)
+                    : undefined
+                }
               />
             )}
             {tableSteps.length > 0 && (

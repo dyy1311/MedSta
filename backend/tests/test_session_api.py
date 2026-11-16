@@ -1,5 +1,6 @@
 """006 会话编排 API：REST 上传 + SessionService 编排测试。"""
 import io
+import pathlib
 
 import pandas as pd
 
@@ -49,6 +50,78 @@ def test_upload_rejects_oversized_file(monkeypatch) -> None:
 
     assert resp.status_code == 413
     assert "上限" in resp.json()["detail"]
+
+
+# ---- 批量列类型修改（用户批量操作需求） ----
+
+
+def _upload_two_numeric(client, session_id: str) -> str:
+    resp = client.post(
+        f"/sessions/{session_id}/data",
+        files={
+            "file": (
+                "d.csv",
+                io.BytesIO(b"group,value,age,score\nA,1,25,3.1\nB,2,31,4.2\n"),
+                "text/csv",
+            )
+        },
+    )
+    assert resp.status_code == 200
+    return resp.json()["dataset_id"]
+
+
+def test_batch_column_types_updates_all_at_once() -> None:
+    """批量：一次请求把多列改为指定类型，type_confirmed 置位，快照同步。"""
+    import json
+
+    client, session_id = _client_with_session()
+    root = pathlib.Path(client.app.state.data_root)
+    dataset_id = _upload_two_numeric(client, session_id)
+
+    resp = client.patch(
+        f"/sessions/{session_id}/workspace/{dataset_id}/columns",
+        json={"types": {"value": "continuous", "age": "ordinal", "score": "continuous"}},
+    )
+
+    assert resp.status_code == 200
+    profile = resp.json()["profile"]
+    assert profile["columns"]["value"]["type"] == "continuous"
+    assert profile["columns"]["age"]["type"] == "ordinal"
+    assert resp.json()["profile"]["type_confirmed"] is True
+
+    snapshot_path = root / session_id / "snapshot.json"
+    assert snapshot_path.is_file()
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    dataset = snapshot["datasets"][0]
+    assert dataset["type_confirmed"] is True
+    assert dataset["column_types"]["age"] == "ordinal"
+
+
+def test_batch_column_types_rejects_unknown_column_atomically() -> None:
+    """批量：含未知列时整体拒绝（404），不做部分修改。"""
+    client, session_id = _client_with_session()
+    dataset_id = _upload_two_numeric(client, session_id)
+
+    resp = client.patch(
+        f"/sessions/{session_id}/workspace/{dataset_id}/columns",
+        json={"types": {"value": "continuous", "nope": "ordinal"}},
+    )
+
+    assert resp.status_code == 404
+    assert "nope" in resp.json()["detail"]
+
+
+def test_batch_column_types_rejects_invalid_type() -> None:
+    """批量：含非法类型时整体拒绝（400）。"""
+    client, session_id = _client_with_session()
+    dataset_id = _upload_two_numeric(client, session_id)
+
+    resp = client.patch(
+        f"/sessions/{session_id}/workspace/{dataset_id}/columns",
+        json={"types": {"value": "banana"}},
+    )
+
+    assert resp.status_code == 400
 
 
 # ---- SessionService 编排测试（模拟模型） ----

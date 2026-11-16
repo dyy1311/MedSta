@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Database } from "lucide-react";
 import { COLUMN_TYPE_LABELS, type TableProfile } from "../types";
 
@@ -21,10 +22,40 @@ const TYPE_COLORS: Record<string, string> = {
 interface Props {
   profile: TableProfile;
   onSetColumnType?: (column: string, type: string) => void;
+  /** 批量列类型修改：一次回调 {列名: 类型} */
+  onSetColumnTypes?: (types: Record<string, string>) => void;
 }
 
-export default function ProfileTable({ profile, onSetColumnType }: Props) {
+export default function ProfileTable({
+  profile,
+  onSetColumnType,
+  onSetColumnTypes,
+}: Props) {
   const columns = Object.values(profile.columns);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchType, setBatchType] = useState("continuous");
+  const editable = Boolean(onSetColumnType || onSetColumnTypes);
+
+  const allSelected = columns.length > 0 && selected.size === columns.length;
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(columns.map((col) => col.name)));
+  };
+  const toggleOne = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+  const applyBatch = () => {
+    if (!onSetColumnTypes || selected.size === 0) return;
+    const types: Record<string, string> = {};
+    for (const name of selected) types[name] = batchType;
+    onSetColumnTypes(types);
+    setSelected(new Set());
+  };
+
   return (
     <div className="rounded-2xl bg-surface-card p-4 shadow-card">
       <div className="mb-3 flex items-center gap-2">
@@ -34,10 +65,65 @@ export default function ProfileTable({ profile, onSetColumnType }: Props) {
           {profile.row_count} 行 × {profile.column_count} 列
         </span>
       </div>
+
+      {editable && (
+        <div
+          data-testid="batch-bar"
+          className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2"
+        >
+          <span className="text-xs font-medium text-primary-dark">
+            {`已选 ${selected.size} 列`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            disabled={selected.size === 0}
+            className="cursor-pointer text-xs text-ink-muted hover:text-ink disabled:opacity-40"
+          >
+            清除选择
+          </button>
+          <label className="ml-auto flex items-center gap-1.5 text-xs text-ink">
+            批量设为
+            <select
+              aria-label="批量类型"
+              value={batchType}
+              onChange={(event) => setBatchType(event.target.value)}
+              disabled={selected.size === 0}
+              className="cursor-pointer rounded-lg border border-ink/15 bg-white px-2 py-1 text-xs disabled:opacity-40"
+            >
+              {SELECTABLE.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={applyBatch}
+            disabled={selected.size === 0}
+            className="cursor-pointer rounded-lg bg-primary px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            应用类型
+          </button>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-ink/10 text-xs text-ink-muted">
+              {editable && (
+                <th className="w-8 py-2 pr-1">
+                  <input
+                    type="checkbox"
+                    aria-label="全选列"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="cursor-pointer"
+                  />
+                </th>
+              )}
               <th className="py-2 pr-3 font-medium">列名</th>
               <th className="py-2 pr-3 font-medium">类型</th>
               <th className="py-2 pr-3 font-medium">缺失</th>
@@ -48,8 +134,21 @@ export default function ProfileTable({ profile, onSetColumnType }: Props) {
             {columns.map((col) => (
               <tr
                 key={col.name}
-                className="border-b border-ink/5 transition-colors last:border-0 hover:bg-surface-page"
+                className={`border-b border-ink/5 transition-colors last:border-0 hover:bg-surface-page ${
+                  selected.has(col.name) ? "bg-primary-soft/40" : ""
+                }`}
               >
+                {editable && (
+                  <td className="w-8 py-2 pr-1 align-middle">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择列 ${col.name}`}
+                      checked={selected.has(col.name)}
+                      onChange={() => toggleOne(col.name)}
+                      className="cursor-pointer"
+                    />
+                  </td>
+                )}
                 <td className="py-2 pr-3 font-medium text-ink">{col.name}</td>
                 <td className="py-2 pr-3">
                   {onSetColumnType ? (

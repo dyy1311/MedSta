@@ -85,3 +85,22 @@ export function updateColumnType(
     return response.json();
   });
 }
+
+/** 批量列类型修改：一次请求多列，整体校验（非法列/类型整体拒绝） */
+export function updateColumnTypes(
+  sessionId: string,
+  datasetId: string,
+  types: Record<string, string>
+): Promise<{ type: string; dataset_id: string; profile: TableProfile }> {
+  return fetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ types }),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(String((detail as Record<string, string>).detail ?? "批量修改失败"));
+    }
+    return response.json();
+  });
+}

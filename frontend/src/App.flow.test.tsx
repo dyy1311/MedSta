@@ -346,7 +346,8 @@ describe("会话流交互", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /工作区（1）/ }));
     const workspaceSection = container.querySelectorAll<HTMLElement>("main > section")[1];
-    const typeSelect = within(workspaceSection).getAllByRole("combobox")[1];
+    // [0]=批量类型下拉，[1]=group 行，[2]=value 行
+    const typeSelect = within(workspaceSection).getAllByRole("combobox")[2];
     fireEvent.change(typeSelect, { target: { value: "ordinal" } });
 
     const patchCall = fetchSpy.mock.calls.find(

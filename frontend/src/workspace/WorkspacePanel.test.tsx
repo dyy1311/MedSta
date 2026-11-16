@@ -95,7 +95,8 @@ describe("WorkspacePanel", () => {
     );
 
     const selects = screen.getAllByRole("combobox");
-    fireEvent.change(selects[1], { target: { value: "index" } });
+    // [0]=批量类型，[1..]=逐行类型下拉；value 是第 2 行
+    fireEvent.change(selects[2], { target: { value: "index" } });
 
     expect(onSetColumnType).toHaveBeenCalledWith("value", "index");
   });

@@ -84,11 +84,40 @@ async def upload_data(session_id: str, file: UploadFile, request: Request) -> di
 
 @router.patch("/sessions/{session_id}/workspace/{dataset_id}/columns")
 async def patch_columns(session_id: str, dataset_id: str, body: dict, request: Request) -> dict:
-    """用户修正列类型（视为敲定），返回更新后的画像。"""
+    """用户修正列类型（视为敲定），返回更新后的画像。
+
+    支持批量：body 带 `types`（{列名: 类型}）时一次修改多列；
+    整体校验通过后才落库，不做部分修改。
+    """
     session = manager.get(session_id)
     data = session.datasets.get(dataset_id) if session else None
     if data is None:
         raise HTTPException(status_code=404, detail="工作区不存在")
+
+    types: dict = body.get("types") or {}
+    if types:
+        # 先整体校验再落库：任何一列/类型非法都不修改（批量原子性）
+        unknown = [c for c in types if str(c) not in data.profile.columns]
+        if unknown:
+            raise HTTPException(
+                status_code=404, detail=f"列不存在：{', '.join(map(str, unknown))}"
+            )
+        invalid = [t for t in types.values() if str(t) not in VALID_COLUMN_TYPES]
+        if invalid:
+            raise HTTPException(
+                status_code=400, detail=f"非法列类型：{', '.join(map(str, invalid))}"
+            )
+        for column, new_type in types.items():
+            apply_column_type(data.df, data.profile, str(column), str(new_type))
+        data.type_confirmed = True
+        data.profile.type_confirmed = True
+        request.app.state.service.persist(session_id)
+        return {
+            "type": "data_profile",
+            "dataset_id": dataset_id,
+            "profile": data.profile.model_dump(),
+        }
+
     column = str(body.get("column", ""))
     new_type = str(body.get("type", ""))
     if column not in data.profile.columns:
