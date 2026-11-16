@@ -611,6 +611,9 @@ export default function App() {
     <ChainBuilder
       sessionId={activeChat?.sessionId ?? ""}
       columns={Object.keys(activeWorkspace?.profile.columns ?? {})}
+      columnTypes={Object.fromEntries(
+        Object.entries(activeWorkspace?.profile.columns ?? {}).map(([name, col]) => [name, col.type])
+      )}
       busy={phase === "thinking" || phase === "executing"}
       importSteps={activeChat ? latestPlanSteps(messages) : null}
       onRun={(steps) => {

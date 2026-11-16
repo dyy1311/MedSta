@@ -29,22 +29,37 @@ interface ToolSpecView {
   charts: string[];
 }
 
+interface TemplateView {
+  name: string;
+  steps: ChainStep[];
+}
+
 interface Props {
   sessionId: string;
   columns: string[];
+  /** 列名 → 画像类型（快捷勾选按列类型批量选择） */
+  columnTypes?: Record<string, string>;
   busy: boolean;
   importSteps: ChainStep[] | null;
   onRun: (steps: ChainStep[]) => void;
 }
 
-
-export default function ChainBuilder({ columns, busy, importSteps, onRun }: Props) {
+export default function ChainBuilder({
+  columns,
+  columnTypes = {},
+  busy,
+  importSteps,
+  onRun,
+}: Props) {
   const [tools, setTools] = useState<ToolSpecView[]>([]);
   const [selected, setSelected] = useState("");
   const [targets, setTargets] = useState<string[]>([]);
   const [chart, setChart] = useState<string>("none");
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [chain, setChain] = useState<ChainStep[]>([]);
+  const [templates, setTemplates] = useState<TemplateView[]>([]);
+  const [tplName, setTplName] = useState("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +69,12 @@ export default function ChainBuilder({ columns, busy, importSteps, onRun }: Prop
         if (!cancelled) setTools(payload.tools ?? []);
       })
       .catch(() => undefined); // 目录加载失败仅影响装配，不影响既有会话
+    fetch("/templates")
+      .then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error(String(resp.status)))))
+      .then((payload: { templates: TemplateView[] }) => {
+        if (!cancelled) setTemplates(payload.templates ?? []);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -132,6 +153,63 @@ export default function ChainBuilder({ columns, busy, importSteps, onRun }: Prop
     );
   };
 
+  const selectByTypes = (typeSet: Set<string>) => {
+    setTargets(columns.filter((name) => typeSet.has(columnTypes[name] ?? "")));
+  };
+
+  const refreshTemplates = () => {
+    fetch("/templates")
+      .then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error(String(resp.status)))))
+      .then((payload: { templates: TemplateView[] }) => setTemplates(payload.templates ?? []))
+      .catch(() => undefined);
+  };
+
+  const saveTemplate = async () => {
+    const name = tplName.trim();
+    if (!name || chain.length === 0) return;
+    try {
+      const resp = await fetch(`/templates/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steps: chain }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+        setNotice(`保存失败：${String((detail as Record<string, unknown>).detail ?? resp.status)}`);
+        return;
+      }
+      setNotice(`已保存「${name}」`);
+      setTplName("");
+      refreshTemplates();
+    } catch {
+      setNotice("保存失败：网络异常");
+    }
+  };
+
+  const loadTemplate = (template: TemplateView) => {
+    setChain(
+      template.steps.map((step) => ({
+        method: String(step.method),
+        title: String(step.title ?? step.method),
+        target_columns: Array.isArray(step.target_columns)
+          ? step.target_columns.map(String)
+          : [],
+        chart_type: String(step.chart_type ?? "none"),
+        params: typeof step.params === "object" && step.params !== null ? { ...step.params } : {},
+      }))
+    );
+    setNotice(`已载入「${template.name}」`);
+  };
+
+  const removeTemplate = async (name: string) => {
+    try {
+      await fetch(`/templates/${encodeURIComponent(name)}`, { method: "DELETE" });
+      refreshTemplates();
+    } catch {
+      setNotice("删除失败：网络异常");
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4">
       <div className="flex items-center gap-2">
@@ -174,6 +252,38 @@ export default function ChainBuilder({ columns, busy, importSteps, onRun }: Prop
 
             <fieldset>
               <legend className="mb-1 text-xs font-medium text-ink">目标列</legend>
+              <div className="mb-1.5 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => selectByTypes(new Set(["continuous", "ordinal"]))}
+                  className="cursor-pointer rounded-md border border-primary/30 px-2 py-0.5 text-[11px] text-primary hover:bg-primary/5"
+                >
+                  全部数值列
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    selectByTypes(new Set(["categorical", "text", "boolean"]))
+                  }
+                  className="cursor-pointer rounded-md border border-primary/30 px-2 py-0.5 text-[11px] text-primary hover:bg-primary/5"
+                >
+                  全部类别列
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargets(columns)}
+                  className="cursor-pointer rounded-md border border-ink/20 px-2 py-0.5 text-[11px] text-ink-muted hover:bg-surface-page"
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargets([])}
+                  className="cursor-pointer rounded-md border border-ink/20 px-2 py-0.5 text-[11px] text-ink-muted hover:bg-surface-page"
+                >
+                  清空
+                </button>
+              </div>
               <div className="flex flex-wrap gap-3">
                 {columns.map((column) => (
                   <label key={column} className="flex items-center gap-1 text-xs text-ink">
@@ -358,6 +468,68 @@ export default function ChainBuilder({ columns, busy, importSteps, onRun }: Prop
           <Play className="h-4 w-4" />
           执行工作链
         </button>
+      </section>
+
+      <section className="rounded-2xl bg-surface-card p-3 shadow-card">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-sm font-semibold text-primary-dark">我的工作链</span>
+          <span className="text-xs text-ink-muted">保存当前装配，跨会话复用</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={tplName}
+            onChange={(event) => setTplName(event.target.value)}
+            placeholder="模板名称"
+            className="min-w-0 flex-1 rounded-lg border border-ink/15 bg-white px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => void saveTemplate()}
+            disabled={!tplName.trim() || chain.length === 0}
+            className="shrink-0 cursor-pointer rounded-lg border border-primary px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            保存模板
+          </button>
+        </div>
+        {notice && (
+          <p className="mt-1.5 text-[11px] text-primary" data-testid="tpl-notice">
+            {notice}
+          </p>
+        )}
+        {templates.length === 0 ? (
+          <p className="mt-2 text-xs text-ink-muted">暂无已保存的工作链。</p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {templates.map((template) => (
+              <li
+                key={template.name}
+                className="flex items-center gap-2 rounded-xl border border-ink/8 px-3 py-1.5 text-xs"
+              >
+                <span className="font-medium text-ink">{template.name}</span>
+                <span className="text-ink-faint">
+                  {Array.isArray(template.steps) ? `${template.steps.length} 步` : ""}
+                </span>
+                <span className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => loadTemplate(template)}
+                    className="cursor-pointer rounded-md border border-primary/40 px-2 py-0.5 text-primary transition-colors hover:bg-primary/5"
+                  >
+                    载入
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`删除 ${template.name}`}
+                    onClick={() => void removeTemplate(template.name)}
+                    className="cursor-pointer rounded-md border border-ink/15 px-2 py-0.5 text-ink-muted transition-colors hover:border-danger/40 hover:text-danger"
+                  >
+                    删除
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

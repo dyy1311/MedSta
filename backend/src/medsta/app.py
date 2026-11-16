@@ -13,6 +13,7 @@ from medsta.api.routes_capabilities import router as capabilities_router
 from medsta.api.routes_data import router as data_router
 from medsta.api.routes_export import router as export_router
 from medsta.api.routes_session import router as session_router
+from medsta.api.routes_templates import router as templates_router
 from medsta.api.ws import router as ws_router
 from medsta.session.service import SessionService
 
@@ -21,7 +22,7 @@ FRONTEND_DIST = pathlib.Path(__file__).resolve().parents[3] / "frontend" / "dist
 
 # SPA catch-all 豁免的 API/文档前缀
 _API_PREFIXES = (
-    "/health", "/sessions", "/data", "/ws", "/capabilities", "/export",
+    "/health", "/sessions", "/data", "/ws", "/capabilities", "/export", "/templates",
     "/docs", "/openapi.json", "/redoc",
 )
 
@@ -65,6 +66,7 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     app.include_router(data_router)
     app.include_router(capabilities_router)
     app.include_router(export_router)
+    app.include_router(templates_router)
     app.include_router(ws_router)
 
     root = pathlib.Path(data_root or os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))

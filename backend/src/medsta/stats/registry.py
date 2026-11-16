@@ -575,6 +575,7 @@ def tool_catalog() -> list[dict]:
             "description": spec.description,
             "task": spec.task,
             "applicability": spec.applicability,
+            "accepts": list(spec.accepts),
             "slots": list(spec.slots),
             "params": [
                 {
