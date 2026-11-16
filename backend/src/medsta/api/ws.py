@@ -1,6 +1,7 @@
 """WebSocket 会话端点（薄封装，逻辑在 SessionService）。
 
 send 带锁：progress(on_step ensure_future) 与主流程可能并发写帧。
+出站帧经 EventLog 注入单调 seq 并落盘（035 断线重连回放的数据源）。
 任何一帧处理失败都回错误帧并保持连接：JSON 解析失败、事件字段非法、
 service 穿透异常都不再整条断开，客户端始终能收到可分类的错误事件。
 """
@@ -19,12 +20,14 @@ router = APIRouter()
 async def session_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     service = websocket.app.state.service
+    event_log = service.event_log
     send_lock = asyncio.Lock()
 
     async def send(message: dict) -> None:
         async with send_lock:
-            await websocket.send_json(message)
-            print(f"[ws] sent {message.get('type')} ({len(str(message))} chars)", flush=True)
+            frame = event_log.commit(session_id, message)
+            await websocket.send_json(frame)
+            print(f"[ws] sent {frame.get('type')} (seq={frame.get('seq')})", flush=True)
 
     try:
         while True:
@@ -51,6 +54,14 @@ async def session_ws(websocket: WebSocket, session_id: str) -> None:
                 )
                 continue
             print(f"[ws] recv {session_id[:8]} {event.get('type')}", flush=True)
+
+            # 035 断线重连：客户端带 last_seq 时先补发缺口帧（原帧原 seq，绕过包装）
+            last_seq = event.get("last_seq")
+            if event.get("type") == "resume" and isinstance(last_seq, int):
+                for frame in event_log.read_after(session_id, last_seq):
+                    async with send_lock:
+                        await websocket.send_json(frame)
+
             try:
                 await service.handle(session_id, event, send)
             except AppError as exc:

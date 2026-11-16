@@ -56,6 +56,9 @@ class SessionService:
         self._record_store = record_store
         self._data_root = pathlib.Path(data_root)
         self._store = store if store is not None else SessionStore(data_root)
+        from medsta.session.events import EventLog
+
+        self._event_log = EventLog(data_root)
         self._workflow_factory = workflow_factory or (
             lambda: AnalysisWorkflow(record_store=self._record_store)
         )
@@ -229,6 +232,11 @@ class SessionService:
     @property
     def plans(self) -> dict[str, AnalysisPlan]:
         return self._plans
+
+    @property
+    def event_log(self):
+        """事件流日志（035 断线重连回放的数据源）。"""
+        return self._event_log
 
     def set_column_type(
         self, session_id: str, dataset_id: str, column: str, new_type: str

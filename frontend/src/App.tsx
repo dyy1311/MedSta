@@ -97,6 +97,8 @@ export default function App() {
   const [plotSuggest, setPlotSuggest] = useState<PlotSuggestStep[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false);
+  const [connStatus, setConnStatus] = useState<"connected" | "reconnecting">("connected");
+  const lastSeqRef = useRef<Record<string, number>>({});
   const [activeTab, setActiveTab] = useState<"chat" | "workspace" | "builder">("chat");
   const [uploading, setUploading] = useState(false);
 
@@ -337,7 +339,21 @@ export default function App() {
     connectionRef.current?.close();
     const sid = activeChatIdResolved;
     connSessionRef.current = sid;
-    connectionRef.current = connectSession(sid, (event) => handlerRef.current(sid, event));
+    connectionRef.current = connectSession(
+      sid,
+      (event) => {
+        const seq = (event as unknown as { seq?: number }).seq;
+        if (typeof seq === "number") lastSeqRef.current[sid] = seq;
+        handlerRef.current(sid, event);
+      },
+      undefined,
+      {
+        getLastSeq: () => lastSeqRef.current[sid] ?? null,
+        onStatus: (status) => {
+          if (connSessionRef.current === sid) setConnStatus(status);
+        },
+      }
+    );
     return () => {
       if (connSessionRef.current === sid) {
         connectionRef.current?.close();
@@ -638,6 +654,23 @@ export default function App() {
           </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {activeChat && (
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium ${
+                connStatus === "connected"
+                  ? "text-white/60"
+                  : "animate-breathe bg-warn/25 text-warn"
+              }`}
+              title={connStatus === "connected" ? "WebSocket 已连接" : "连接断开，正在自动重连"}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  connStatus === "connected" ? "bg-ok" : "bg-warn"
+                }`}
+              />
+              {connStatus === "connected" ? "已连接" : "重连中…"}
+            </span>
+          )}
           <button
             onClick={() => setCapabilitiesOpen(true)}
             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/20 px-3 py-1.5 text-xs font-medium text-white/85 transition-colors hover:bg-white/10 hover:text-white"

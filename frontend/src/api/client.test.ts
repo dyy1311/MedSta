@@ -173,4 +173,91 @@ describe("client WebSocket 契约", () => {
     connection.close();
     expect(FakeWebSocket.latest().readyState).toBe(FakeWebSocket.CLOSED);
   });
+
+  it("035: 非手动断线自动重连并携带 resume+last_seq，状态回调驱动徽标", async () => {
+    vi.useFakeTimers();
+    installFakeWebSocket();
+    const statuses: string[] = [];
+    let lastSeq: number | null = 7;
+    const connection = connectSession("s1", () => undefined, undefined, {
+      getLastSeq: () => lastSeq,
+      onStatus: (status) => statuses.push(status),
+    });
+
+    // 首次连接成功
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.latest().url).toBe(`ws://${window.location.host}/ws/s1`);
+    expect(statuses).toEqual(["connected"]);
+
+    // 非手动断线 → reconnecting → 1s 后重连成功 → resume 携带 last_seq
+    FakeWebSocket.latest().onclose?.();
+    expect(statuses.at(-1)).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const reconnected = FakeWebSocket.latest();
+    expect(reconnected).not.toBeUndefined();
+    const resume = reconnected.sent.find((event) => event.type === "resume");
+    expect(resume).toEqual({ type: "resume", last_seq: 7 });
+    expect(statuses.at(-1)).toBe("connected");
+
+    // 事件帧透传（seq 由 App 层记录，client 只转发）
+    reconnected.emit({ type: "plan", seq: 8 });
+    connection.close(); // 手动关闭后不再重连
+    vi.useRealTimers();
+  });
+
+  it("035: 手动 close 不触发重连", async () => {
+    vi.useFakeTimers();
+    installFakeWebSocket();
+    const statuses: string[] = [];
+    const connection = connectSession("s1", () => undefined, undefined, {
+      onStatus: (status) => statuses.push(status),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    connection.close();
+    const count = FakeWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(FakeWebSocket.instances.length).toBe(count);
+    expect(statuses).toEqual(["connected"]);
+
+    vi.useRealTimers();
+  });
+
+  it("035: 重连退避指数增长（连续失败 1s→2s），成功后重置", async () => {
+    vi.useFakeTimers();
+    installFakeWebSocket();
+    const connection = connectSession("s1", () => undefined);
+
+    await vi.advanceTimersByTimeAsync(0);
+    // 第一次断线（此前连接成功）：1s 后重连
+    FakeWebSocket.latest().onclose?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+
+    // 第二次断线发生在成功连接后：退避重置回 1s
+    FakeWebSocket.latest().onclose?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeWebSocket.instances.length).toBe(3);
+
+    // 连续失败：同一实例同步两次 onclose → attempt 1→2，退避 1s→2s
+    const failing = FakeWebSocket.latest();
+    failing.onclose?.();
+    failing.onclose?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeWebSocket.instances.length).toBe(3); // 2s timer 未到
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeWebSocket.instances.length).toBe(4); // 1s timer 触发
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeWebSocket.instances.length).toBe(4); // 2s timer 未到
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeWebSocket.instances.length).toBe(5); // 2s timer 触发
+
+    connection.close();
+    vi.useRealTimers();
+  });
 });
