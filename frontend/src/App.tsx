@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { BarChart3, Boxes, MessagesSquare, Wrench } from "lucide-react";
 import type {
   ChartConfigRequest, ChatMessage, ExecutionReport, Phase, PlotSuggestStep,
@@ -19,6 +20,41 @@ function upsertReport(reports: ExecutionReport[], report: ExecutionReport, repla
   if (replaceLast && next.length > 0) next[next.length - 1] = report;
   else next.push(report);
   return next;
+}
+
+/** 桌面（lg+）三栏并排可拖拽；窄屏由顶部 Tab 切换单栏 */
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(min-width: 1024px)")?.matches
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)");
+    const handler = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    query.addEventListener("change", handler);
+    return () => query.removeEventListener("change", handler);
+  }, []);
+  return isDesktop;
+}
+
+function ResizeHandle({
+  onPointerDown,
+  label,
+}: {
+  onPointerDown: (event: ReactPointerEvent) => void;
+  label: string;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      onPointerDown={onPointerDown}
+      className="group hidden w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-surface-page lg:flex"
+      title="拖拽调整宽度"
+    >
+      <div className="h-14 w-0.5 rounded-full bg-ink/10 transition-colors group-hover:bg-primary/60" />
+    </div>
+  );
 }
 
 /** 最新一条模型方案的步骤（作为装配起点导入） */
@@ -452,6 +488,121 @@ export default function App() {
       ? `/data/${activeChat.sessionId}/${activeChat.datasetId}/artifacts`
       : "";
 
+  // ---- 三区布局：桌面（lg+）三栏并排可拖拽调宽；窄屏由顶部 Tab 切换单栏 ----
+  const isDesktop = useIsDesktop();
+  const [chatWidth, setChatWidth] = useState(380);
+  const [builderWidth, setBuilderWidth] = useState(360);
+  const dragRef = useRef<{ handle: "chat" | "builder"; startX: number; startW: number } | null>(
+    null
+  );
+
+  useEffect(() => {
+    const clamp = (value: number, min: number, max: number) =>
+      Math.min(Math.max(value, min), max);
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const delta = event.clientX - drag.startX;
+      if (drag.handle === "chat") {
+        setChatWidth(clamp(drag.startW + delta, 280, 640));
+      } else {
+        // builder 在最右侧：拖其左边缘，宽度与位移反向
+        setBuilderWidth(clamp(drag.startW - delta, 260, 560));
+      }
+    };
+    const onUp = () => {
+      dragRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  const startDrag = (handle: "chat" | "builder") => (event: ReactPointerEvent) => {
+    dragRef.current = {
+      handle,
+      startX: event.clientX,
+      startW: handle === "chat" ? chatWidth : builderWidth,
+    };
+    event.preventDefault();
+  };
+
+  const chatPane = (
+    <>
+      <SessionTabs
+        sessions={chatSessions}
+        activeId={activeChatIdResolved}
+        onSelect={(sid) => {
+          setActiveChatId(sid);
+          const entry = chatSessions.find((c) => c.sessionId === sid);
+          setBindingBanner(`当前会话绑定表格：${entry?.name ?? "未绑定"}`);
+          setTimeout(() => setBindingBanner(null), 4000);
+        }}
+        onCreate={() => void createChatSession()}
+      />
+      {bindingBanner && (
+        <div className="animate-fade-in-up border-b border-primary/15 bg-primary/5 px-4 py-1.5 text-xs text-primary">
+          {bindingBanner}
+        </div>
+      )}
+      {activeChat && (
+        <ChatPanel
+          messages={messages}
+          uploaded={!!activeChat.datasetId}
+          confirming={confirming}
+          sessionId={activeChat.sessionId}
+          phase={phase}
+          streamText={streamText}
+          progress={progress}
+          chartConfig={chartConfig}
+          typeReview={typeReview}
+          plotSuggest={plotSuggest}
+          bindingName={activeChat.name}
+          onUpload={(file) => void handleUpload(file, activeChat.sessionId)}
+          onSend={handleSend}
+          onConfirm={handleConfirm}
+          onAccept={handleAccept}
+          onRevise={handleRevise}
+          onOption={handleOption}
+          onInterrupt={handleInterrupt}
+          onResume={handleResume}
+          onChartChoice={handleChartChoice}
+          artifactBase={artifactBase}
+          onTypeConfirm={handleTypeConfirm}
+          onPlotLater={handlePlotLater}
+        />
+      )}
+    </>
+  );
+
+  const workspacePane = (
+    <WorkspacePanel
+      sessionId={activeChat?.sessionId ?? ""}
+      workspaces={workspaces}
+      activeId={activeWorkspace?.datasetId ?? null}
+      uploading={uploading}
+      onActivate={handleActivateWorkspace}
+      onUpload={(file) => void handleUpload(file)}
+      onSetColumnType={handleSetColumnType}
+    />
+  );
+
+  const builderPane = (
+    <ChainBuilder
+      sessionId={activeChat?.sessionId ?? ""}
+      columns={Object.keys(activeWorkspace?.profile.columns ?? {})}
+      busy={phase === "thinking" || phase === "executing"}
+      importSteps={activeChat ? latestPlanSteps(messages) : null}
+      onRun={(steps) => {
+        sendWs({ type: "run_chain", steps });
+        setActiveTab("workspace");
+      }}
+    />
+  );
+
   return (
     <div className="flex h-full flex-col bg-surface-page bg-grid-page">
       <header className="bg-header-depth fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-white/8 px-5 shadow-card">
@@ -495,88 +646,51 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 pt-14 max-md:flex-col">
-        <section
-          className={`min-h-0 flex-1 border-ink/8 bg-surface-page max-lg:border-r ${
-            activeTab === "chat" ? "flex" : "hidden lg:flex"
-          } flex-col`}
-        >
-          <SessionTabs
-            sessions={chatSessions}
-            activeId={activeChatIdResolved}
-            onSelect={(sid) => {
-              setActiveChatId(sid);
-              const entry = chatSessions.find((c) => c.sessionId === sid);
-              setBindingBanner(`当前会话绑定表格：${entry?.name ?? "未绑定"}`);
-              setTimeout(() => setBindingBanner(null), 4000);
-            }}
-            onCreate={() => void createChatSession()}
-          />
-          {bindingBanner && (
-            <div className="animate-fade-in-up border-b border-primary/15 bg-primary/5 px-4 py-1.5 text-xs text-primary">
-              {bindingBanner}
-            </div>
-          )}
-          {activeChat && (
-            <ChatPanel
-              messages={messages}
-              uploaded={!!activeChat.datasetId}
-              confirming={confirming}
-              sessionId={activeChat.sessionId}
-              phase={phase}
-              streamText={streamText}
-              progress={progress}
-              chartConfig={chartConfig}
-              typeReview={typeReview}
-              plotSuggest={plotSuggest}
-              bindingName={activeChat.name}
-              onUpload={(file) => void handleUpload(file, activeChat.sessionId)}
-              onSend={handleSend}
-              onConfirm={handleConfirm}
-              onAccept={handleAccept}
-              onRevise={handleRevise}
-              onOption={handleOption}
-              onInterrupt={handleInterrupt}
-              onResume={handleResume}
-              onChartChoice={handleChartChoice}
-              artifactBase={artifactBase}
-              onTypeConfirm={handleTypeConfirm}
-              onPlotLater={handlePlotLater}
-            />
-          )}
-        </section>
-        <section
-          className={`min-h-0 flex-1 bg-surface-card/60 ${
-            activeTab === "workspace" ? "flex" : "hidden lg:flex"
-          } flex-col`}
-        >
-          <WorkspacePanel
-            sessionId={activeChat?.sessionId ?? ""}
-            workspaces={workspaces}
-            activeId={activeWorkspace?.datasetId ?? null}
-            uploading={uploading}
-            onActivate={handleActivateWorkspace}
-            onUpload={(file) => void handleUpload(file)}
-            onSetColumnType={handleSetColumnType}
-          />
-        </section>
-        <section
-          className={`min-h-0 flex-1 bg-surface-card/60 ${
-            activeTab === "builder" ? "flex" : "hidden xl:flex"
-          } flex-col`}
-        >
-          <ChainBuilder
-            sessionId={activeChat?.sessionId ?? ""}
-            columns={Object.keys(activeWorkspace?.profile.columns ?? {})}
-            busy={phase === "thinking" || phase === "executing"}
-            importSteps={activeChat ? latestPlanSteps(messages) : null}
-            onRun={(steps) => {
-              sendWs({ type: "run_chain", steps });
-              setActiveTab("workspace");
-            }}
-          />
-        </section>
-      </main>
+      {isDesktop ? (
+        <main className="flex min-h-0 flex-1 pt-14">
+          <section
+            style={{ width: chatWidth }}
+            className="flex min-h-0 shrink-0 flex-col border-ink/8 bg-surface-page lg:border-r"
+          >
+            {chatPane}
+          </section>
+          <ResizeHandle onPointerDown={startDrag("chat")} label="调整会话区宽度" />
+          <section className="flex min-h-0 flex-1 flex-col bg-surface-card/60">
+            {workspacePane}
+          </section>
+          <ResizeHandle onPointerDown={startDrag("builder")} label="调整工具装配区宽度" />
+          <section
+            style={{ width: builderWidth }}
+            className="flex min-h-0 shrink-0 flex-col bg-surface-card/60"
+          >
+            {builderPane}
+          </section>
+        </main>
+      ) : (
+        <main className="flex min-h-0 flex-1 flex-col pt-14">
+          <section
+            className={`flex min-h-0 flex-1 flex-col border-ink/8 bg-surface-page ${
+              activeTab === "chat" ? "flex" : "hidden"
+            }`}
+          >
+            {chatPane}
+          </section>
+          <section
+            className={`flex min-h-0 flex-1 flex-col bg-surface-card/60 ${
+              activeTab === "workspace" ? "flex" : "hidden"
+            }`}
+          >
+            {workspacePane}
+          </section>
+          <section
+            className={`flex min-h-0 flex-1 flex-col bg-surface-card/60 ${
+              activeTab === "builder" ? "flex" : "hidden"
+            }`}
+          >
+            {builderPane}
+          </section>
+        </main>
+      )}
 
       <CapabilityDrawer open={capabilitiesOpen} onClose={() => setCapabilitiesOpen(false)} />
     </div>

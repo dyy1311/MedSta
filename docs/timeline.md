@@ -52,6 +52,7 @@
 
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
+| 2026-11-16 | 需求 | 三区布局重构 + 结果表格化：桌面（lg+）三栏并排 + 两枚拖拽手柄实时调宽（会话 280–640px / 装配 260–560px，useIsDesktop 响应式）；窄屏回归 Tab 单栏切换（修复 lg~xl 区间工作区恒显、xl 以上 Tab 全失效的断点类混乱）；新增 `ResultTable` 通用「结果 JSON → 表格」渲染器——审阅卡「结果数据」默认展开表格（原始 JSON 折叠后备），工作区对无专用表格步骤渲染「结果数据」卡 | 用户报告三缺陷：选项卡切换失败（断点类互相覆盖）、三区拖拽未实现、部分工具结果只有原始 JSON 无表格；`ResultTable` 跳过 method_note/strategy 元键，标量→指标表、对象数组→动态列子表 |
 | 2026-11-16 | 需求 | 033 原子统计工作链完成（产品定位调整：模型不灌管线）：WS `run_chain` 手动装配执行通道（宿主 `validate_plan` 硬校验、跳过出图确认暂停、零模型参与可执行）；前端「工具装配」Tab（按分类选工具、按 ToolSpec 动态参数表单、目标列/图表选择、工作链上移/下移/删除、模型方案一键导入）；交付态可装配新链，执行中被 SESSION_BUSY 拒绝 | 用户主权要求：每个统计分析指令工具化，模型只提建议，用户自行装配确认后执行；registry 22 个 ToolSpec 即原子单位 |
 | 2026-11-16 | 环境 | 安装三个前端技能到 `~/.codebuddy/skills/`：`frontend-dev`（高级 UI+动效）、`awesome-design-md`（54 个品牌设计系统模板）、`frontend-design-guidelines`（SkillHub 下载量 11.3K 的反 AI 模板化设计指导） | 用户要求联网检索并安装高分前端/美化技能 |
 | 2026-11-16 | 需求 | 前端视觉升级（美学方向：精密仪器/Refined，参考 Linear 层次纪律）：自托管 Space Grotesk（display/数字排印）+ 全局 `tabular-nums` 数字等宽；头部深度渐变（双色光晕+底边微光）；页面「坐标纸」底纹；阴影四级体系（xs/sm/card/hover/pop）；细滚动条、品牌选区色、统一 focus-visible 环；执行进度不定态 shimmer；统计表表头分层+行 hover、卡片 hover 提升 | skill 指导：commit to a palette、memorable element、避免 AI 默认扁平观感；统计工具核心可读性=数字等宽对齐；截图验证通过 |

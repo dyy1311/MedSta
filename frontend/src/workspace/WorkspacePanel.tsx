@@ -3,6 +3,7 @@ import { BarChart3, CloudUpload, FileSpreadsheet, Inbox, Plus } from "lucide-rea
 import type { ExecutionReport, WorkspaceTab } from "../types";
 import ProfileTable from "./ProfileTable";
 import ChartCard from "./ChartCard";
+import ResultTable from "./ResultTable";
 
 /** 历史报告可寻址导出：带 report_id 定位对应报告，缺省由后端取最新（M2）。 */
 function reportQuery(report: ExecutionReport): string {
@@ -49,6 +50,16 @@ export default function WorkspacePanel({
           stepIndex: number;
           reportId: string | undefined;
         } => typeof item.filename === "string"
+      )
+  );
+  // 无专用表格但 result 含数据的步骤：由 JSON 解析生成结果卡（用户要求表格化呈现）
+  const resultOnlySteps = reports.flatMap((report) =>
+    report.steps
+      .map((step, stepIndex) => ({ step, stepIndex }))
+      .filter(
+        ({ step }) =>
+          !step.table?.rows?.length &&
+          Object.keys(step.result ?? {}).filter((key) => key !== "method_note").length > 0
       )
   );
 
@@ -192,6 +203,36 @@ export default function WorkspacePanel({
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {resultOnlySteps.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <FileSpreadsheet className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-semibold text-primary-dark">
+                    结果数据（{resultOnlySteps.length}）
+                  </span>
+                  <span className="text-[11px] text-ink-faint">无专用表格的步骤，由结果 JSON 解析生成</span>
+                </div>
+                <div className="space-y-3">
+                  {resultOnlySteps.map(({ step, stepIndex }) => (
+                    <div
+                      key={`result-${stepIndex}`}
+                      data-testid={`result-card-${stepIndex}`}
+                      className="animate-fade-in-up rounded-2xl bg-surface-card p-3 shadow-card"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="text-sm font-medium text-ink">{step.title}</span>
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            step.status === "success" ? "bg-ok" : "bg-danger"
+                          }`}
+                        />
+                      </div>
+                      <ResultTable result={step.result} />
                     </div>
                   ))}
                 </div>

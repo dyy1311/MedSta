@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CheckCheck, PencilLine, TrendingUp, TriangleAlert } from "lucide-react";
 import type { ExecutionReport } from "../types";
+import ResultTable from "../workspace/ResultTable";
 
 interface Props {
   report: ExecutionReport;
@@ -124,11 +125,18 @@ export default function ReviewCard({ report, delivered, artifactBase, onAccept, 
             {typeof step.result?.method_note === "string" && step.result.method_note.trim() ? (
               <MethodNote note={step.result.method_note} />
             ) : null}
-            <details className="mt-1.5">
-              <summary className="cursor-pointer text-[11px] text-ink-muted">原始数据</summary>
-              <pre className="mt-1 max-h-40 overflow-auto rounded bg-primary-dark/95 p-2 text-[11px] text-primary-cyan">
-                {JSON.stringify(step.result, null, 2)}
-              </pre>
+            {/* 结果数据以表格呈现（用户硬要求）；原始 JSON 仅作折叠后备 */}
+            <details className="mt-1.5" open={!step.table?.rows?.length}>
+              <summary className="cursor-pointer text-[11px] text-ink-muted">结果数据</summary>
+              <div className="mt-1.5">
+                <ResultTable result={step.result} compact />
+              </div>
+              <details className="mt-1.5">
+                <summary className="cursor-pointer text-[11px] text-ink-faint">原始 JSON</summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded bg-primary-dark/95 p-2 text-[11px] text-primary-cyan">
+                  {JSON.stringify(step.result, null, 2)}
+                </pre>
+              </details>
             </details>
           </li>
           );
