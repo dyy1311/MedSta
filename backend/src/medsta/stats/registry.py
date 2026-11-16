@@ -847,6 +847,7 @@ def execute_step(
     params = normalize_params(spec, step)
     # 内部保留键：需要落盘产物的 handler（如 impute）据此写文件，模型不可填写
     params["_artifact_dir"] = str(pathlib.Path(artifact_dir))
+    params["_step_index"] = index
     result = spec.handler(df, step, params)
     # 单一入口兜底：新增方法只要登记 METHOD_NOTES 就自动带教材口径说明
     result.setdefault("method_note", METHOD_NOTES.get(spec.name, ""))

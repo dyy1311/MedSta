@@ -135,15 +135,15 @@ def test_delta_scan_linear_shift(tmp_path) -> None:
 
 
 def test_writes_csv_to_artifact_dir(tmp_path) -> None:
-    """B12: 插补结果写入 _artifact_dir，文件名稳定。"""
+    """B12: 插补结果写入 _artifact_dir；未注入 _step_index 时默认 0 号产物。"""
     frame, _, _ = _frame_with_missing()
     step = _step(["x", "y"], _artifact_dir=str(tmp_path))
 
     result = impute(frame, step, step.params)
 
     path = result["imputed_dataset"]["path"]
-    assert path.endswith("imputed_step.csv")
-    assert (tmp_path / "imputed_step.csv").exists()
+    assert path.endswith("imputed_step_0.csv")
+    assert (tmp_path / "imputed_step_0.csv").exists()
     assert result["imputed_dataset"]["name"].endswith("（MICE 插补）")
 
 

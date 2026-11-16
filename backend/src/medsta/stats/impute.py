@@ -50,7 +50,11 @@ def impute_mice(
 
     filled = data.to_numpy(copy=True)
     filled[missing_mask] = mean_values[missing_mask]
-    between_variance = float(np.mean(np.var(stacked, axis=0, ddof=1)))
+    # 插补间方差只在缺失格计算（M19）：观测格各次插补相同（方差恒 0），
+    # 计入均值会按缺失占比系统性低估 between-imputation variance
+    between_variance = float(
+        np.mean(np.var(stacked[:, missing_mask], axis=0, ddof=1))
+    )
     return pd.DataFrame(filled, columns=columns, index=frame.index), between_variance
 
 
@@ -159,7 +163,9 @@ def impute(df: pd.DataFrame, step: Any, params: dict) -> dict:
     else:
         target = pathlib.Path(artifact_dir)
         target.mkdir(parents=True, exist_ok=True)
-        path = target / "imputed_step.csv"
+        # 按步骤索引命名（M20）：同计划多个插补步骤不再互相覆盖
+        step_index = int(params.get("_step_index", 0) or 0)
+        path = target / f"imputed_step_{step_index}.csv"
         imputed.to_csv(path, index=False)
         dataset = {
             "path": str(path),

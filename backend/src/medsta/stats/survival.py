@@ -327,8 +327,14 @@ def survival_analysis(df: pd.DataFrame, step: Any, params: dict) -> dict[str, An
     return attach_significance(result, "p_value", alpha) if result.get("p_value") is not None else result
 
 
-def _schoenfeld_check(model: Any, columns: Any, times: np.ndarray) -> list[dict[str, Any]]:
-    """Schoenfeld 残差与时间的 Spearman 相关（教材未给，按外部标准实现）。"""
+def _schoenfeld_check(
+    model: Any, columns: Any, times: np.ndarray, events: np.ndarray
+) -> list[dict[str, Any]]:
+    """Schoenfeld 残差与时间的 Spearman 相关（教材未给，按外部标准实现）。
+
+    statsmodels 0.14 的残差与 nobs 对齐、删失行置 0：必须按事件掩码排除，
+    否则伪 0 残差与删失的大时间一并进入 Spearman，rho 被稀释（M8）。
+    """
     raw = getattr(model, "schoenfeld_residuals", None)
     if raw is None:
         return []
@@ -341,6 +347,8 @@ def _schoenfeld_check(model: Any, columns: Any, times: np.ndarray) -> list[dict[
             break
         values = residuals[:, index]
         valid = np.isfinite(values)
+        if len(values) == len(events):
+            valid = valid & (np.asarray(events) == 1)
         if valid.sum() < 3:
             checks.append({"term": str(term), "rho": 0.0, "p_value": 1.0, "violated": False})
             continue
@@ -420,7 +428,7 @@ def cox_fit(time: Any, event: Any, covariates: pd.DataFrame) -> dict[str, Any]:
         "coefficients": coefficients,
         "lr_test": lr_test,
         "score_test": score_test,
-        "ph_check": _schoenfeld_check(model, frame.columns, times),
+        "ph_check": _schoenfeld_check(model, frame.columns, times, events),
     }
 
 
