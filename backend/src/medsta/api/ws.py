@@ -19,6 +19,13 @@ router = APIRouter()
 @router.websocket("/ws/{session_id}")
 async def session_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
+
+    # 038 可选鉴权：配置令牌时 WS 需带 ?token=<令牌>，错误即拒（close 4401）
+    expected_token: str | None = getattr(websocket.app.state, "auth_token", None)
+    if expected_token and websocket.query_params.get("token") != expected_token:
+        await websocket.close(code=4401, reason="缺少或错误的访问令牌（?token=）")
+        return
+
     service = websocket.app.state.service
     event_log = service.event_log
     send_lock = asyncio.Lock()

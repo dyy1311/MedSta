@@ -20,6 +20,7 @@ cd ../frontend && npm install && cd ..
 
 # 3. 配置模型服务（OpenAI 兼容接口）
 cp .env.example .env   # 填写 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+# 可选：设置 MEDSTA_AUTH_TOKEN 开启访问令牌鉴权（HTTP 头 X-Auth-Token；WS ?token=；/health 豁免）
 
 # 4. 一键启动（dev：后端 8000 + 前端 5173）
 python main.py

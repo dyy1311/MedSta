@@ -52,6 +52,7 @@
 
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
+| 2026-11-17 | 需求 | 038 可选单令牌鉴权：env `MEDSTA_AUTH_TOKEN` 开关（未配置时零行为变化，既有 450 用例零改动全绿即证明）；配置后 HTTP 全路由（/health 豁免）要求 X-Auth-Token 或 Bearer，WS 升级要求 `?token=`（错则 accept 后 close 4401），SPA fallback 与静态 /data 同受保护；CORS 仅在鉴权关闭时保留 `*`；.env.example 与 README 补配置说明 | 审查遗留 A2（零鉴权+CORS *+0.0.0.0）：单机内用可接受，局域网/公网部署前需可开启；后端 456 passed（+6） |
 | 2026-11-17 | 需求 | 037 工作链增强二期：链间管道（impute 产出 `_next_frame` 内部键，executor 经 `execute_step_with_frame` 替换后续步骤 df；registry 出口 `execute_step` 剥离该键维持严格 JSON 硬门）；装配器按 accepts+列类型置灰不适用工具（无类型信息不置灰）；链含 impute 显示管道提示；模板导出 `GET /templates/{name}/export` 与导入 `POST /templates/import`（重名 409，overwrite 覆盖），前端 FileReader 读取（jsdom 无 file.text） | 033 产品闭环：插补→分析必须拆两次执行；模板需跨用户/机器交换；后端 450 passed、前端 75 passed |
 | 2026-11-16 | 需求 | 036 会话消息流完整回放（035 增强）：用户动作（chat/确认/审阅/选项/类型确认/装配链等 9 类）在 `service.handle` 入口统一记入事件流为 `<event>_user` 帧（占 seq、不实时广播、内容精简只含 content/decision/option_id）；重连回放自然包含用户帧，前端按 `*_user` 后缀渲染用户气泡（review_user(revise) 渲染修正意见），刷新/重启后聊天上下文完整重建；回放帧经 ws 裸发通道不写回事件流（幂等，回放区间帧内容与顺序不变）；`events.jsonl` 增加轮转（超阈值保留尾部一半，seq 内存计数器不回退） | 035 明确的后续项：用户自己发的消息不在事件流中，刷新/重启后聊天上下文断裂；后端 444 passed、前端 72 passed |
 | 2026-11-16 | 需求 | 统计层三处中危修复（审查遗留）：M8 Schoenfeld PH 检查按事件掩码排除删失行（statsmodels 0.14 残差删失行置 0，此前伪 0 与删失大时间稀释 Spearman rho、PH 违反检出率下降）；M19 MICE 插补间方差只在缺失格计算（此前观测格方差恒 0 计入均值，按缺失占比系统性低估）；M20 插补产物按 `_step_index` 命名 `imputed_step_{i}.csv`（此前固定名，同计划两次插补互相覆盖）；registry `execute_step` 注入 `_step_index` 内部键 | 代码审查遗留 P2 正确性尾差；确定性测试守护（FakeModel 残差 / FakeImputer 确定性填充 / 双产物共存断言）；后端 441 passed |

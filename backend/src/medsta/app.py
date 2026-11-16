@@ -4,9 +4,9 @@ from __future__ import annotations
 import os
 import pathlib
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from medsta.api.routes_capabilities import router as capabilities_router
@@ -56,12 +56,37 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
 
 def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     app = FastAPI(title="MedSta", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+
+    # 038 可选单令牌鉴权：env 未设置/空时行为与现状完全一致（零开销直通）
+    auth_token = (os.environ.get("MEDSTA_AUTH_TOKEN") or "").strip()
+    app.state.auth_token = auth_token or None
+    if not app.state.auth_token:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    @app.middleware("http")
+    async def auth_guard(request: Request, call_next):
+        token: str | None = getattr(app.state, "auth_token", None)
+        if token:
+            provided = request.headers.get("X-Auth-Token") or ""
+            if not provided:
+                bearer = request.headers.get("Authorization") or ""
+                if bearer.startswith("Bearer "):
+                    provided = bearer[len("Bearer "):].strip()
+            if provided != token and request.url.path != "/health":
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": "缺少或错误的访问令牌",
+                        "hint": "请求需携带 X-Auth-Token 或 Authorization: Bearer <token>",
+                    },
+                )
+        return await call_next(request)
+
     app.include_router(session_router)
     app.include_router(data_router)
     app.include_router(capabilities_router)
