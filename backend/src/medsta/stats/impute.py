@@ -213,6 +213,8 @@ def impute(df: pd.DataFrame, step: Any, params: dict) -> dict:
         "delta_scan": scan,
         "warnings": warnings,
         "alpha": alpha,
+        # 037 链间管道：插补后 DataFrame 传给同链后续步骤（executor 在 JSON 化前剥离）
+        "_next_frame": imputed,
         "table": {
             "columns": ["column", "missing_before", "missing_after", "method", "m"],
             "rows": summary_rows,

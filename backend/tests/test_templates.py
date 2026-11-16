@@ -122,3 +122,58 @@ def test_tool_catalog_exposes_accepts(tmp_path) -> None:
     accepts = {tool["name"]: tool.get("accepts") for tool in catalog}
     assert accepts["group_compare"]  # 数值类
     assert "categorical" in accepts["mcnemar_test"]
+
+
+# ---- 037：模板导入导出（文件交换） ----
+
+
+def test_export_template_as_json_attachment(tmp_path) -> None:
+    """B4: GET /templates/{name}/export 返回 JSON 附件（name/steps 完整）。"""
+    client = _client(tmp_path)
+    client.put("/templates/t1", json={"steps": _STEPS})
+
+    resp = client.get("/templates/t1/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    assert "attachment" in resp.headers.get("content-disposition", "")
+    payload = resp.json()
+    assert payload["name"] == "t1"
+    assert payload["steps"] == _STEPS
+
+    # 导出不存在的模板 → 404
+    assert client.get("/templates/nope/export").status_code == 404
+
+
+def test_import_template_creates(tmp_path) -> None:
+    """B5a: POST /templates/import 创建模板（复用 name/steps 校验）。"""
+    client = _client(tmp_path)
+
+    resp = client.post("/templates/import", json={"name": "导入的", "steps": _STEPS})
+
+    assert resp.status_code == 200
+    listing = client.get("/templates").json()["templates"]
+    assert any(t["name"] == "导入的" and t["steps"] == _STEPS for t in listing)
+
+    # 未知方法拒绝（复用 PUT 校验）
+    bad = client.post(
+        "/templates/import", json={"name": "x", "steps": [{**_STEPS[0], "method": "nope"}]}
+    )
+    assert bad.status_code == 400
+
+
+def test_import_conflict_and_overwrite(tmp_path) -> None:
+    """B5b: 重名未带 overwrite → 409；带 overwrite=true → 覆盖成功。"""
+    client = _client(tmp_path)
+    client.put("/templates/t1", json={"steps": _STEPS[:1]})
+
+    conflict = client.post("/templates/import", json={"name": "t1", "steps": _STEPS})
+    assert conflict.status_code == 409
+
+    overwrite = client.post(
+        "/templates/import?overwrite=true", json={"name": "t1", "steps": _STEPS}
+    )
+    assert overwrite.status_code == 200
+    listing = client.get("/templates").json()["templates"]
+    assert len(listing) == 1
+    assert listing[0]["steps"] == _STEPS

@@ -838,7 +838,28 @@ def normalize_params(spec: ToolSpec, step: Any) -> dict:
 def execute_step(
     df: pd.DataFrame, step: Any, artifact_dir: Any, index: int
 ) -> tuple[dict, str | None]:
-    """执行一步并渲染图表；调用方应先用 validate_step 校验。"""
+    """执行一步并渲染图表；调用方应先用 validate_step 校验。
+
+    出口契约：result 必须严格 JSON（tests/test_json_contract.py 硬门），
+    管道内部键 `_next_frame` 在此剥离（037）。
+    """
+    result, artifact = _execute_step_impl(df, step, artifact_dir, index)
+    result.pop("_next_frame", None)
+    return result, artifact
+
+
+def execute_step_with_frame(
+    df: pd.DataFrame, step: Any, artifact_dir: Any, index: int
+) -> tuple[dict, str | None, Any]:
+    """executor 专用（037 链间管道）：额外返回数据产出型工具的 DataFrame。"""
+    result, artifact = _execute_step_impl(df, step, artifact_dir, index)
+    frame = result.pop("_next_frame", None)
+    return result, artifact, frame
+
+
+def _execute_step_impl(
+    df: pd.DataFrame, step: Any, artifact_dir: Any, index: int
+) -> tuple[dict, str | None]:
     import pathlib
 
     spec = get_tool(step.method)

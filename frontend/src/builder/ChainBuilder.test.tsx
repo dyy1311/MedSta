@@ -32,6 +32,30 @@ const TOOLS = {
       charts: ["boxplot", "none"],
       accepts: ["continuous", "ordinal"],
     },
+    {
+      name: "impute",
+      title: "缺失值插补",
+      category: "描述与质检",
+      description: "MICE/简单插补，产出新数据集",
+      task: "描述",
+      applicability: "存在缺失的数据",
+      slots: [],
+      params: [{ name: "method", type: "choice", required: false, description: "插补方法", choices: ["mice", "median"], default: "mice" }],
+      charts: ["none"],
+      accepts: ["continuous", "ordinal"],
+    },
+    {
+      name: "mcnemar_test",
+      title: "配对四格表",
+      category: "组间比较",
+      description: "配对分类比较",
+      task: "因果",
+      applicability: "配对二分类",
+      slots: [],
+      params: [],
+      charts: ["none"],
+      accepts: ["categorical"],
+    },
   ],
   charts: [{ name: "boxplot", label: "boxplot" }],
 };
@@ -68,6 +92,11 @@ async function renderBuilder(props = {}, templates: unknown[] = []) {
       path: `/templates/${TPL_NAME_ENC}`,
       method: "DELETE",
       respond: () => jsonResponse({ ok: true }),
+    },
+    {
+      path: "/templates/import",
+      method: "POST",
+      respond: () => jsonResponse({ ok: true, name: "外来的" }),
     },
   ]);
   render(<ChainBuilder {...baseProps} {...props} />);
@@ -138,7 +167,7 @@ describe("ChainBuilder 原子工具装配", () => {
   });
 
   it("B6a: 命名保存当前工作链（PUT /templates/{name}）", async () => {
-    const spy = await renderBuilder();
+    await renderBuilder();
 
     fireEvent.change(screen.getByLabelText("统计工具"), { target: { value: "describe" } });
     fireEvent.click(screen.getByLabelText("value"));
@@ -161,7 +190,7 @@ describe("ChainBuilder 原子工具装配", () => {
   });
 
   it("B6b: 模板列表可载入（步骤回填）与删除（DELETE）", async () => {
-    const spy = await renderBuilder(
+    await renderBuilder(
       {},
       [{ name: "我的套路", steps: TPL_STEPS, created_at: "2026-11-16", updated_at: "2026-11-16" }]
     );
@@ -191,5 +220,63 @@ describe("ChainBuilder 原子工具装配", () => {
     expect(screen.getByLabelText("value")).toBeChecked();
     expect(screen.getByLabelText("age")).toBeChecked();
     expect(screen.getByLabelText("group")).not.toBeChecked();
+  });
+
+  // ---- 037：类型置灰 / 管道提示 / 模板导入导出 ----
+
+  it("037: 数据列类型与 accepts 完全不相交的工具置灰", async () => {
+    await renderBuilder({
+      columnTypes: { group: "continuous", value: "continuous", age: "continuous" },
+    });
+
+    const mcnemar = screen.getByRole("option", { name: /配对四格表/ }) as HTMLOptionElement;
+    expect(mcnemar).toBeDisabled();
+
+    const describe = screen.getByRole("option", { name: "描述性统计" }) as HTMLOptionElement;
+    expect(describe).not.toBeDisabled();
+  });
+
+  it("037: 链含 impute 步骤时显示管道提示", async () => {
+    await renderBuilder();
+
+    fireEvent.change(screen.getByLabelText("统计工具"), { target: { value: "impute" } });
+    fireEvent.click(screen.getByLabelText("value"));
+    fireEvent.click(screen.getByRole("button", { name: /添加到工作链/ }));
+
+    expect(screen.getByTestId("pipeline-hint")).toHaveTextContent("后续步骤将使用插补数据");
+  });
+
+  it("037: 模板可导出（链接）与导入（读文件后 POST /templates/import）", async () => {
+    await renderBuilder(
+      {},
+      [{ name: "我的套路", steps: TPL_STEPS, created_at: "t", updated_at: "t" }]
+    );
+
+    // 导出：模板列表项的下载链接指向 export 端点
+    const exportLink = screen.getByRole("link", { name: "导出 我的套路" });
+    expect(exportLink).toHaveAttribute(
+      "href",
+      `/templates/${TPL_NAME_ENC}/export`
+    );
+
+    // 导入：读取 JSON 文件后 POST /templates/import
+    const importInput = screen.getByTestId("import-template-input") as HTMLInputElement;
+    const file = new File(
+      [JSON.stringify({ name: "外来的", steps: TPL_STEPS })],
+      "tpl.json",
+      { type: "application/json" }
+    );
+    fireEvent.change(importInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      const post = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          url === "/templates/import" && (init as RequestInit)?.method === "POST"
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(String(post![1]?.body));
+      expect(body.name).toBe("外来的");
+      expect(body.steps).toHaveLength(1);
+    });
   });
 });

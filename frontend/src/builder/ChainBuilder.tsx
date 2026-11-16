@@ -27,6 +27,8 @@ interface ToolSpecView {
   applicability: string;
   params: ToolParamSpec[];
   charts: string[];
+  /** 工具可接受的目标列类型（037 置灰依据） */
+  accepts?: string[];
 }
 
 interface TemplateView {
@@ -81,6 +83,20 @@ export default function ChainBuilder({
   }, []);
 
   const tool = useMemo(() => tools.find((t) => t.name === selected) ?? null, [tools, selected]);
+  /** 037 置灰：数据列类型与工具 accepts 完全不相交时禁选（提示而非隐藏） */
+  const dataTypes = useMemo(
+    () =>
+      new Set(
+        columns
+          .map((name) => columnTypes[name] ?? "")
+          .filter(Boolean)
+      ),
+    [columns, columnTypes]
+  );
+  const isInapplicable = (item: ToolSpecView): boolean => {
+    if (!item.accepts || item.accepts.length === 0 || dataTypes.size === 0) return false;
+    return !item.accepts.some((type) => dataTypes.has(type));
+  };
   const categories = useMemo(() => {
     const grouped = new Map<string, ToolSpecView[]>();
     for (const item of tools) {
@@ -210,6 +226,45 @@ export default function ChainBuilder({
     }
   };
 
+  /** 037 模板导入：读取 JSON 文件（FileReader 兼容 jsdom；重名由 notice 提示） */
+  const importTemplateFile = async (file: File) => {
+    const readAsText = () =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file);
+      });
+    try {
+      const payload = JSON.parse(await readAsText()) as {
+        name?: string;
+        steps?: ChainStep[];
+      };
+      if (!payload.name || !Array.isArray(payload.steps) || payload.steps.length === 0) {
+        setNotice("导入失败：文件需含 name 与非空 steps");
+        return;
+      }
+      const resp = await fetch("/templates/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: payload.name, steps: payload.steps }),
+      });
+      if (resp.status === 409) {
+        setNotice(`模板「${payload.name}」已存在；如需覆盖请先删除原模板`);
+        return;
+      }
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+        setNotice(`导入失败：${String((detail as Record<string, unknown>).detail ?? resp.status)}`);
+        return;
+      }
+      setNotice(`已导入「${payload.name}」`);
+      refreshTemplates();
+    } catch {
+      setNotice("导入失败：文件不是合法 JSON");
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4">
       <div className="flex items-center gap-2">
@@ -233,11 +288,24 @@ export default function ChainBuilder({
             <option value="">选择工具…</option>
             {categories.map(([category, items]) => (
               <optgroup key={category} label={category}>
-                {items.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.title}
-                  </option>
-                ))}
+                {items.map((item) => {
+                  const inapplicable = isInapplicable(item);
+                  return (
+                    <option
+                      key={item.name}
+                      value={item.name}
+                      disabled={inapplicable}
+                      title={
+                        inapplicable
+                          ? `类型不适用：数据列为 [${[...dataTypes].join("、")}]，需要 [${item.accepts?.join("、")}]`
+                          : undefined
+                      }
+                    >
+                      {item.title}
+                      {inapplicable ? "（类型不适用）" : ""}
+                    </option>
+                  );
+                })}
               </optgroup>
             ))}
           </select>
@@ -459,6 +527,14 @@ export default function ChainBuilder({
             ))}
           </ol>
         )}
+        {chain.some((step) => step.method === "impute") && (
+          <p
+            data-testid="pipeline-hint"
+            className="mt-2 rounded-lg bg-primary/5 px-2.5 py-1.5 text-[11px] text-primary-dark"
+          >
+            后续步骤将使用插补数据（链间管道：插补后的数据集自动作为后续步骤的输入）
+          </p>
+        )}
         <button
           type="button"
           onClick={run}
@@ -517,6 +593,13 @@ export default function ChainBuilder({
                   >
                     载入
                   </button>
+                  <a
+                    href={`/templates/${encodeURIComponent(template.name)}/export`}
+                    aria-label={`导出 ${template.name}`}
+                    className="cursor-pointer rounded-md border border-primary/40 px-2 py-0.5 text-primary transition-colors hover:bg-primary/5"
+                  >
+                    导出
+                  </a>
                   <button
                     type="button"
                     aria-label={`删除 ${template.name}`}
@@ -530,6 +613,20 @@ export default function ChainBuilder({
             ))}
           </ul>
         )}
+        <label className="mt-2 flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-ink/20 px-2 py-1 text-[11px] text-ink-muted transition-colors hover:border-primary/40 hover:text-primary">
+          导入模板文件…
+          <input
+            data-testid="import-template-input"
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importTemplateFile(file);
+              event.target.value = "";
+            }}
+          />
+        </label>
       </section>
     </div>
   );

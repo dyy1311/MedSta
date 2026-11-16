@@ -178,7 +178,7 @@ describe("client WebSocket 契约", () => {
     vi.useFakeTimers();
     installFakeWebSocket();
     const statuses: string[] = [];
-    let lastSeq: number | null = 7;
+    const lastSeq: number | null = 7;
     const connection = connectSession("s1", () => undefined, undefined, {
       getLastSeq: () => lastSeq,
       onStatus: (status) => statuses.push(status),

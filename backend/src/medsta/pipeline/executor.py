@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from medsta.agents.discussion import AnalysisPlan
 from medsta.errors import ErrorCode, ToolValidationError
-from medsta.stats.registry import HARD_ISSUE_CODES, execute_step, validate_plan
+from medsta.stats.registry import HARD_ISSUE_CODES, execute_step_with_frame, validate_plan
 
 
 class StepResult(BaseModel):
@@ -74,7 +74,13 @@ class PipelineExecutor:
             if on_step is not None:
                 on_step(index, total, step.title)
             try:
-                result, artifact = execute_step(df, step, artifact_dir, index)
+                # 037 链间管道：数据产出型工具（如 impute）的插补后 DataFrame
+                # 供同链后续步骤使用；_next_frame 在 registry 入口剥离（不进报告）
+                result, artifact, next_frame = execute_step_with_frame(
+                    df, step, artifact_dir, index
+                )
+                if next_frame is not None:
+                    df = next_frame
                 if artifact and step.params.get("_layout") == "shared":
                     shared_paths.append((index, artifact_dir / artifact))
                 report.steps.append(
