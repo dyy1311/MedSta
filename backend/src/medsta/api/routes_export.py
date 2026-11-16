@@ -29,9 +29,19 @@ def _sanitize_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 @router.get("/export/{session_id}/{step_index}")
-def export_step(session_id: str, step_index: int, request: Request, format: str = "csv"):
+def export_step(
+    session_id: str,
+    step_index: int,
+    request: Request,
+    format: str = "csv",
+    report_id: str | None = None,
+):
     service = request.app.state.service
-    report = service.reports.get(session_id)
+    if report_id:
+        # 历史报告寻址导出（M2）：缺省仍取最新报告
+        report = service.report_history.get(session_id, {}).get(report_id)
+    else:
+        report = service.reports.get(session_id)
     if report is None or step_index >= len(report["steps"]):
         raise HTTPException(status_code=404, detail="执行报告不存在")
     step = report["steps"][step_index]

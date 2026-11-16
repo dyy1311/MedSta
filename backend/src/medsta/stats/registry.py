@@ -851,9 +851,13 @@ def execute_step(
     result.setdefault("method_note", METHOD_NOTES.get(spec.name, ""))
     artifact: str | None = None
     if step.chart_type != "none":
-        path = render_chart(df, step, pathlib.Path(artifact_dir), index, result=result)
-        result["artifact"] = path.name
-        artifact = path.name
+        # 渲染失败不连带丢弃统计结果：记录 chart_error，步骤仍算成功（E1）
+        try:
+            path = render_chart(df, step, pathlib.Path(artifact_dir), index, result=result)
+            result["artifact"] = path.name
+            artifact = path.name
+        except Exception as exc:
+            result["chart_error"] = f"图表渲染失败：{type(exc).__name__}: {str(exc)[:200]}"
     return result, artifact
 
 

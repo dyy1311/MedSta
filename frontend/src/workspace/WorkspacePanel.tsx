@@ -1,8 +1,13 @@
 import { useRef } from "react";
 import { BarChart3, CloudUpload, FileSpreadsheet, Inbox, Plus } from "lucide-react";
-import type { WorkspaceTab } from "../types";
+import type { ExecutionReport, WorkspaceTab } from "../types";
 import ProfileTable from "./ProfileTable";
 import ChartCard from "./ChartCard";
+
+/** 历史报告可寻址导出：带 report_id 定位对应报告，缺省由后端取最新（M2）。 */
+function reportQuery(report: ExecutionReport): string {
+  return report.report_id ? `&report_id=${report.report_id}` : "";
+}
 
 interface Props {
   sessionId: string;
@@ -117,7 +122,7 @@ export default function WorkspacePanel({
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {tableSteps.map(({ step, reportIndex }) => (
+                  {tableSteps.map(({ step, report, reportIndex }) => (
                     <div
                       key={`${step.title}-${reportIndex}`}
                       className="rounded-2xl bg-surface-card p-3 shadow-card"
@@ -125,13 +130,13 @@ export default function WorkspacePanel({
                       <div className="mb-1.5 flex items-center gap-2">
                         <span className="text-sm font-medium text-ink">{step.title}</span>
                         <a
-                          href={`/export/${sessionId}/${reportIndex}?format=csv`}
+                          href={`/export/${sessionId}/${reportIndex}?format=csv${reportQuery(report)}`}
                           className="ml-auto cursor-pointer text-[11px] text-primary hover:underline"
                         >
                           CSV
                         </a>
                         <a
-                          href={`/export/${sessionId}/${reportIndex}?format=xlsx`}
+                          href={`/export/${sessionId}/${reportIndex}?format=xlsx${reportQuery(report)}`}
                           className="cursor-pointer text-[11px] text-primary hover:underline"
                         >
                           Excel

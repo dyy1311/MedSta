@@ -195,4 +195,18 @@ describe("ChartCard", () => {
     expect(download).toHaveAttribute("href", "/data/s1/d1/artifacts/chart.png");
     expect(download).toHaveAttribute("download", "chart.png");
   });
+
+  it("报告带 report_id 时导出链接携带该参数（历史报告可寻址导出）", () => {
+    const reportWithId: ExecutionReport = { ...REPORT, report_id: "abc12345" };
+    render(<WorkspacePanel {...baseProps} workspaces={[workspace({ reports: [reportWithId] })]} />);
+
+    expect(screen.getByRole("link", { name: "CSV" })).toHaveAttribute(
+      "href",
+      "/export/s1/0?format=csv&report_id=abc12345"
+    );
+    expect(screen.getByRole("link", { name: "Excel" })).toHaveAttribute(
+      "href",
+      "/export/s1/0?format=xlsx&report_id=abc12345"
+    );
+  });
 });

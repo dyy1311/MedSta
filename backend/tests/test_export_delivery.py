@@ -173,3 +173,48 @@ def test_xlsx_export_escapes_formula_prefixes(client, app, session_id: str) -> N
     labels = frame["label"].tolist()
     assert labels[0].startswith("'=")
     assert not any(str(cell).startswith("=") for cell in labels)
+
+
+def _plan_describe(column: str) -> dict:
+    return {
+        "message": f"描述 {column}",
+        "steps": [
+            {
+                "title": f"分布统计 {column}",
+                "method": "describe",
+                "target_columns": [column],
+                "chart_type": "none",
+                "params": {},
+                "rationale": "连续变量先看分布",
+            }
+        ],
+        "options": [{"id": "go", "label": "按此执行", "action": "confirm"}],
+    }
+
+
+def test_export_by_report_id_targets_history_report(client, app, session_id: str) -> None:
+    """M2: 带 report_id 的导出定位对应历史报告；缺省仍取最新报告。"""
+    app.state.service.set_agent(fake_agent(_plan_describe("age")))
+    upload_csv(client, session_id)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        _, review1 = drive_to_review(ws)
+        rid1 = review1["report"]["report_id"]
+        ws.send_json({"type": "review", "decision": "revise", "content": "换一列"})
+        collect_until(ws, {"back_to_discussion"})
+
+    app.state.service.set_agent(fake_agent(_plan_describe("value")))
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_json({"type": "chat", "content": "看 value"})
+        collect_until(ws, {"plan"})
+        ws.send_json({"type": "confirm_plan"})
+        _, review2 = collect_until(ws, {"review_request"})
+        rid2 = review2["report"]["report_id"]
+
+    assert rid1 and rid2 and rid1 != rid2
+    old = client.get(f"/export/{session_id}/0?format=csv&report_id={rid1}")
+    new = client.get(f"/export/{session_id}/0?format=csv&report_id={rid2}")
+    default = client.get(f"/export/{session_id}/0?format=csv")
+    assert old.status_code == 200 and new.status_code == 200
+    assert b"age" in old.content
+    assert b"value" in new.content
+    assert b"value" in default.content  # 缺省 = 最新

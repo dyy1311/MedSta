@@ -162,6 +162,29 @@ def test_mcnemar_accepts_textual_binary_columns(tmp_path) -> None:
     assert result["p_value"] < 0.05
 
 
+def test_chart_failure_keeps_statistical_result(tmp_path, monkeypatch) -> None:
+    """E1: 图表渲染失败时保留统计结果并记录 chart_error，不再整步 failed。"""
+    from medsta.stats import registry as registry_module
+
+    step = _step(
+        "group_compare",
+        target_columns=["age"],
+        params={"group_column": "sex"},
+        chart_type="violin",
+    )
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("渲染崩溃")
+
+    monkeypatch.setattr(registry_module, "render_chart", boom)
+
+    result, artifact = registry_module.execute_step(_df(), step, tmp_path, 0)
+
+    assert result["test"] == "t"  # 统计结果保留
+    assert artifact is None
+    assert "渲染崩溃" in result["chart_error"]
+
+
 def test_logistic_regression_outputs_odds_ratios(tmp_path) -> None:
     """B9: logistic 回归输出 OR 与 accuracy（非分离数据）"""
     rng = np.random.default_rng(23)

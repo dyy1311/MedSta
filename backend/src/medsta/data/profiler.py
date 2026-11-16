@@ -98,8 +98,11 @@ def _infer_column_type(series: pd.Series, name: str, position: int) -> ColumnTyp
 
 
 def _numeric_stats(series: pd.Series) -> dict[str, float | int | None]:
-    """七列口径：计数/均值/中位数/q25/q75/最小/最大。"""
-    values = series.dropna()
+    """七列口径：计数/均值/中位数/q25/q75/最小/最大。
+
+    用户可把任意列修正为数值-连续/等级：不可解析的值按缺失处理而非抛 TypeError。
+    """
+    values = pd.to_numeric(series, errors="coerce").dropna()
     if values.empty:
         return {"count": 0, "mean": None, "median": None,
                 "q25": None, "q75": None, "min": None, "max": None}
@@ -160,4 +163,7 @@ def apply_column_type(
     entry = profile.columns[column]
     entry.type = new_type
     entry.stats = _column_stats(series, new_type)
+    if new_type in ("continuous", "ordinal"):
+        # 不可解析为数值的值按缺失计入（与 _numeric_stats 的 to_numeric 口径一致）
+        entry.missing = int(len(series) - int(entry.stats["count"]))
     return profile

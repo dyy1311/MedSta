@@ -90,6 +90,7 @@ export interface ReportStep {
 }
 
 export interface ExecutionReport {
+  report_id?: string;
   steps: ReportStep[];
   interpretation?: Interpretation | null;
 }
