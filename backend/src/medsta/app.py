@@ -91,8 +91,14 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=404, detail="Not Found")
-            candidate = FRONTEND_DIST / spa_path
-            if spa_path and candidate.is_file():
+            # 路径穿越防护：URL 编码的 ..（%2F/%2E）会进入 spa_path，
+            # 解析后的真实路径必须仍位于 dist 目录内，否则回退 SPA 入口
+            candidate = (FRONTEND_DIST / spa_path).resolve()
+            if (
+                spa_path
+                and candidate.is_file()
+                and candidate.is_relative_to(FRONTEND_DIST.resolve())
+            ):
                 return FileResponse(candidate)
             return FileResponse(FRONTEND_DIST / "index.html")
 

@@ -4,10 +4,13 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
+import pandas as pd
 import pytest
 
-from medsta.stats.survival import km_estimate, logrank_test
+from medsta.stats.survival import km_estimate, logrank_test, survival_analysis
 
 # 例 14-2：肿瘤直径 ≤2cm 组，15 例（`+` 表示删失）
 TIME_14_2 = np.array([10, 10, 13, 18, 25, 29, 30, 33, 46, 50, 54, 68, 71, 88, 95], dtype=float)
@@ -148,3 +151,47 @@ def test_breslow_weights_differ_from_logrank() -> None:
 
     assert breslow["method"] == "breslow"
     assert breslow["chi2"] != pytest.approx(logrank["chi2"], rel=1e-6)
+
+
+def test_breslow_variance_uses_squared_weights() -> None:
+    """P0: Breslow 加权和检验的方差项须乘 w²（Σw²·Var），否则 χ² 被系统性放大。
+
+    手算基准：A 组 (1,事件)(5,删失)，B 组 (2,事件)(4,事件)(6,删失)。
+    事件时刻 1/2/4 的 w 依次为 5/4/3，w² 依次为 25/16/9：
+      O_A = 5·1 = 5，E_A = 5·(2/5)·1 + 4·(1/4)·1 + 3·(1/3)·1 = 4 → 差 = 1
+      Var(A) = 25·0.4·0.6 + 16·0.25·0.75 + 9·(1/3)(2/3) = 11 → χ² = 1/11
+    （缺 w² 时 Var(A)=2.6167，χ²=0.382，被放大 4 倍以上）
+    """
+    time = np.array([1.0, 5.0, 2.0, 4.0, 6.0])
+    event = np.array([1, 0, 1, 1, 0])
+    group = np.array(["a", "a", "b", "b", "b"])
+
+    result = logrank_test(time, event, group, weight="breslow")
+
+    assert result["chi2"] == pytest.approx(1.0 / 11.0, abs=1e-6)
+
+
+def test_rmst_group_comparison_uses_common_tau() -> None:
+    """P0: 未指定 tau 时组间 RMST 须以「各组最大随访最小值」统一截断后才能相减。
+
+    registry 承诺 tau「默认各组最大随访最小值」；各组各用自己的最大随访
+    截断会导致 tau 不同的 RMST 直接相减，差值无效。
+    """
+    frame = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 20.0, 1.0, 2.0, 3.0, 30.0],
+            "event": [1, 1, 1, 0, 1, 1, 1, 0],
+            "group": ["a", "a", "a", "a", "b", "b", "b", "b"],
+        }
+    )
+    step = SimpleNamespace(target_columns=["time", "event"])
+
+    result = survival_analysis(
+        frame,
+        step,
+        {"time_col": "time", "event_col": "event", "group_col": "group", "method": "km"},
+    )
+
+    groups = result["rmst"]["groups"]
+    assert groups["a"]["tau"] == pytest.approx(20.0)
+    assert groups["b"]["tau"] == pytest.approx(20.0)

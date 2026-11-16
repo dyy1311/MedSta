@@ -293,6 +293,29 @@ def test_mcnemar_corrected_when_b_plus_c_small() -> None:
     assert result["chi2"] == pytest.approx((abs(5 - 15) - 1) ** 2 / 20, abs=1e-6)
 
 
+def test_cramers_v_computed_on_fisher_path() -> None:
+    """P0: Fisher 精确检验路径也须给出 Cramér's V（基于观测表 χ² 近似），而非恒 0。"""
+    from medsta.stats.methods import chi_square
+
+    frame = _fourfold(7, 1, 1, 7)
+    result = chi_square(frame, _step("chi_square", ["group", "event"]), {})
+
+    assert result["tier"] == "fisher"
+    # 观测表 χ²=16·(7·7−1)²/8⁴=9，n=16，min(shape)−1=1 → V=√(9/16)=0.75
+    assert result["cramers_v"] == pytest.approx(0.75, abs=1e-6)
+
+
+def test_chi_square_embedded_stats_uses_attached_stars() -> None:
+    """P0: 结果内嵌表的 significance 须取 attach_significance 之后的星号，而非恒 ns。"""
+    from medsta.stats.methods import chi_square
+
+    frame = _fourfold(7, 1, 1, 7)
+    result = chi_square(frame, _step("chi_square", ["group", "event"]), {})
+
+    assert result["table"]["stats"][0]["significance"] == result["stars"]
+    assert result["table"]["stats"][0]["significance"] != "ns"
+
+
 def test_multi_rate_pairwise_bonferroni() -> None:
     """B15: 多个样本率整体显著后按 χ² 分割做两两比较，α'=α/C(k,2)。"""
     from medsta.stats.methods import chi_square

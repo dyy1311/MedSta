@@ -497,6 +497,47 @@ def test_paired_non_normal_difference_uses_wilcoxon() -> None:
     assert result["p_value"] < 0.05
 
 
+def test_auc_uses_average_ranks_for_ties() -> None:
+    """P0: AUC 对并列预测值须用平均秩（Mann-Whitney 并列修正）。
+
+    单一二分类协变量下预测值只有 2 个取值：正确对 9 + 并列对 3（各计 0.5）
+    → U=12，AUC=12/16=0.75。顺序秩实现会按行序计分得 0.5625。
+    """
+    df = pd.DataFrame(
+        {
+            "x": [0, 0, 0, 0, 1, 1, 1, 1],
+            "y": [1, 0, 0, 0, 1, 1, 1, 0],
+        }
+    )
+    step = _step("logistic_regression", ["y"], target="y", features=["x"])
+
+    result = methods.logistic_regression(df, step, step.params)
+
+    assert result["auc"] == pytest.approx(0.75, abs=1e-6)
+
+
+def test_paired_wilcoxon_bootstrap_resamples_differences() -> None:
+    """P0: 配对 Wilcoxon 的 bootstrap 区间须对差值做单样本重抽样，保留配对结构。"""
+    before = np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0])
+    diff = np.array([2.9, 3.0, 3.1, 3.0, 2.9, 3.1, 3.0])
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 7 + ["after"] * 7,
+            "value": list(before) + list(before - diff),
+        }
+    )
+    step = _step(
+        "group_compare", ["value"], group_column="group", paired=True, test="wilcoxon"
+    )
+
+    result = methods.group_compare(df, step, step.params)
+
+    low, high = result["ci95"]
+    # 差值几乎恒为 3 → 配对重抽样的中位差区间应窄且覆盖真实中位差
+    assert high - low < 1.0
+    assert low <= 3.0 <= high
+
+
 def test_mannwhitney_reports_median_diff_bootstrap() -> None:
     """B3: 非参数路径给中位数差与 bootstrap 区间，不冒充均值差 CI。"""
     df = pd.DataFrame(

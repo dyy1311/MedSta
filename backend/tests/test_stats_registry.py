@@ -141,6 +141,27 @@ def test_chi_square_two_by_two_odds_ratio(tmp_path) -> None:
     assert 0.0 <= result["cramers_v"] <= 1.0
 
 
+def test_mcnemar_accepts_textual_binary_columns(tmp_path) -> None:
+    """P0: McNemar 的分类列不再被数值充分性检查硬拒（阴/阳性文本配对可用）。"""
+    pairs = (
+        [("阳性", "阳性")] * 30
+        + [("阳性", "阴性")] * 5
+        + [("阴性", "阳性")] * 15
+        + [("阴性", "阴性")] * 30
+    )
+    frame = pd.DataFrame(pairs, columns=["method_a", "method_b"])
+    step = _step(
+        "mcnemar_test",
+        target_columns=["method_a", "method_b"],
+        params={"row_column": "method_a", "col_column": "method_b"},
+    )
+
+    assert validate_step(step, frame) == []
+
+    result, _ = execute_step(frame, step, tmp_path, 0)
+    assert result["p_value"] < 0.05
+
+
 def test_logistic_regression_outputs_odds_ratios(tmp_path) -> None:
     """B9: logistic 回归输出 OR 与 accuracy（非分离数据）"""
     rng = np.random.default_rng(23)

@@ -139,6 +139,19 @@ def _bootstrap_median_diff(
     return float(low), float(high)
 
 
+def _bootstrap_paired_median_diff(
+    a: np.ndarray, b: np.ndarray, *, n_boot: int = 2000, seed: int = 20261023
+) -> tuple[float, float]:
+    """配对设计中位差区间：对差值做单样本 bootstrap，保留配对结构。"""
+    rng = np.random.default_rng(seed)
+    pairwise = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    medians = np.median(
+        rng.choice(pairwise, size=(n_boot, len(pairwise)), replace=True), axis=1
+    )
+    low, high = np.percentile(medians, [2.5, 97.5])
+    return float(low), float(high)
+
+
 def describe(df: pd.DataFrame, step: Any, params: dict) -> dict:
     group_by = params.get("group_by")
     stats: dict[str, Any] = {}
@@ -445,7 +458,10 @@ def group_compare(df: pd.DataFrame, step: Any, params: dict) -> dict:
 
     if final_method in ("mannwhitney", "wilcoxon"):
         median_diff = float(np.median(values_a[:length]) - np.median(values_b[:length]))
-        low, high = _bootstrap_median_diff(values_a[:length], values_b[:length])
+        if paired:
+            low, high = _bootstrap_paired_median_diff(values_a[:length], values_b[:length])
+        else:
+            low, high = _bootstrap_median_diff(values_a[:length], values_b[:length])
         result.update(
             {
                 "ci95": [low, high],
@@ -964,13 +980,23 @@ def chi_square(df: pd.DataFrame, step: Any, params: dict) -> dict:
         final_method = "chi_square"
         alternative = "次优：Fisher 精确检验（仅适用于 2×2）"
 
+    # 先附加显著性星号，保证内嵌表的 significance 与最终判定一致
+    attach_significance(result, "p_value", alpha)
+
     result["strategy"] = {
         "steps": strategy_steps,
         "final_method": final_method,
         "alternative": alternative,
     }
 
-    result["cramers_v"] = float(np.sqrt(result.get("chi2", 0) / (n * (min(table.shape) - 1)))) if n else 0.0
+    chi2_for_v = result.get("chi2")
+    if chi2_for_v is None:
+        # Fisher 精确路径无 χ² 统计量：按观测表补算近似 χ² 供效应量参考
+        chi2_for_v = float(sp_stats.chi2_contingency(table, correction=False)[0])
+        result["effect_chi2"] = chi2_for_v
+    result["cramers_v"] = (
+        float(np.sqrt(chi2_for_v / (n * (min(table.shape) - 1)))) if n else 0.0
+    )
     count_rows = [
         {row_column: str(row_name), **{str(col): int(table.loc[row_name, col]) for col in table.columns}}
         for row_name in table.index
@@ -997,7 +1023,7 @@ def chi_square(df: pd.DataFrame, step: Any, params: dict) -> dict:
         comparison = str(params.get("comparison", "all_pairs") or "all_pairs")
         result["pairwise"] = _rate_pairwise(table, alpha, comparison)
     result["method_note"] = METHOD_NOTES["chi_square"]
-    return attach_significance(result, "p_value", alpha)
+    return result
 
 
 def _group_rates(table: pd.DataFrame, event_value: Any = None) -> list[dict[str, Any]]:
@@ -1297,9 +1323,8 @@ def logistic_regression(df: pd.DataFrame, step: Any, params: dict) -> dict:
 
 def _auc(scores: np.ndarray, labels: np.ndarray) -> float:
     labels = np.asarray(labels).astype(int)
-    order = np.argsort(scores)
-    ranks = np.empty(len(scores), dtype=float)
-    ranks[order] = np.arange(1, len(scores) + 1)
+    # 平均秩（Mann-Whitney 并列修正）：并列预测值之间各计 0.5
+    ranks = sp_stats.rankdata(scores)
     n_pos = int((labels == 1).sum())
     n_neg = int((labels == 0).sum())
     if n_pos == 0 or n_neg == 0:

@@ -197,7 +197,12 @@ _REGISTRY: dict[str, ToolSpec] = {
                 "test", "choice", "检验方法；auto 按正态性自动选择",
                 choices=("auto", "t", "mannwhitney"), default="auto",
             ),
-            ToolParam("paired", "boolean", "是否配对样本（仅 t 检验生效）", default=False),
+            ToolParam(
+                "paired",
+                "boolean",
+                "是否配对样本（长表按行序对齐；配对 t 检验或 Wilcoxon 符号秩生效）",
+                default=False,
+            ),
         ),
         charts=("boxplot", "violin"),
         handler=methods.group_compare,
@@ -752,8 +757,8 @@ def _check_data(
     def add(code: ErrorCode, message: str, hint: str = "") -> None:
         issues.append(ToolIssue(code=code.value, message=message, hint=hint, step_index=index))
 
-    if spec.name in ("missing_report", "describe", "aggregate_table"):
-        # 这三个方法原生支持分类列，不做数值量检查
+    if spec.name in ("missing_report", "describe", "aggregate_table", "mcnemar_test"):
+        # 这些方法原生支持分类列，不做数值量检查
         return issues
 
     if spec.group_param:

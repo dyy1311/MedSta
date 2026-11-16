@@ -276,12 +276,19 @@ def survival_analysis(df: pd.DataFrame, step: Any, params: dict) -> dict[str, An
 
     rmst_summary: dict[str, Any] = {}
     if group_column:
+        grouped = list(frame.groupby(frame[group_column].astype(str), sort=False))
+        # 未显式指定 tau 时以「各组最大随访最小值」统一截断，保证组间 RMST 可比
+        common_tau = (
+            float(tau)
+            if tau
+            else min(float(chunk[time_column].max()) for _, chunk in grouped)
+        )
         per_group = {}
-        for label, chunk in frame.groupby(frame[group_column].astype(str), sort=False):
+        for label, chunk in grouped:
             per_group[str(label)] = rmst(
                 chunk[time_column].to_numpy(dtype=float),
                 chunk[event_column].to_numpy(dtype=int),
-                tau=float(tau) if tau else None,
+                tau=common_tau,
             )
         rmst_summary["groups"] = per_group
         labels = list(per_group)
@@ -498,10 +505,11 @@ def logrank_test(
         expected += weight_value * counts * total_events / total_at_risk
         for a in range(k):
             for b in range(k):
+                # 加权和检验方差为 Σ w²·Var：Breslow 权重须平方（log-rank w=1 不变）
                 if a == b:
-                    variance[a, b] += weight_value * factor * proportion[a] * (1 - proportion[a])
+                    variance[a, b] += weight_value**2 * factor * proportion[a] * (1 - proportion[a])
                 else:
-                    variance[a, b] -= weight_value * factor * proportion[a] * proportion[b]
+                    variance[a, b] -= weight_value**2 * factor * proportion[a] * proportion[b]
 
     difference = (observed - expected)[: k - 1]
     covariance = variance[: k - 1, : k - 1]
