@@ -25,6 +25,19 @@ from medsta.stats.registry import HARD_ISSUE_CODES, ToolIssue, get_tool, validat
 
 SendFn = Callable[[dict], Awaitable[None]]
 
+# 用户驱动的动作：记入事件流（036 消息流完整回放），帧类型为 "<event>_user"
+USER_ACTION_EVENTS = {
+    "chat",
+    "confirm_plan",
+    "review",
+    "option",
+    "chart_choice",
+    "type_confirm",
+    "run_chain",
+    "plot_later",
+    "interrupt",
+}
+
 
 def _step_signature(report: dict) -> tuple[tuple[str, str], ...]:
     """报告指纹：解释返回时用于判断报告是否已被新执行覆盖。"""
@@ -283,6 +296,17 @@ class SessionService:
             )
             return
         event_type = event.get("type")
+        if event_type in USER_ACTION_EVENTS:
+            # 036：用户动作入事件流（占 seq、不实时广播）——刷新/重启后可重建用户气泡
+            compact = {
+                "type": f"{event_type}_user",
+                "content": str(event.get("content", "") or ""),
+            }
+            if event.get("decision"):
+                compact["decision"] = str(event.get("decision"))
+            if event.get("option_id"):
+                compact["option_id"] = str(event.get("option_id"))
+            self._event_log.commit(session_id, compact)
         handler = {
             "chat": self._on_chat,
             "confirm_plan": self._on_confirm,

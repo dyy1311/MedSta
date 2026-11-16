@@ -122,6 +122,16 @@ export default function App() {
   const handleEvent = useCallback((ownerSid: string, event: WsEvent) => {
     const isActive = ownerSid === activeChatIdResolved;
     const emit = (message: ChatMessage) => pushMessage(ownerSid, message);
+    // 036 回放：用户动作帧重建用户气泡（刷新/重启后聊天上下文完整）
+    if ((event as unknown as { type: string }).type?.endsWith("_user")) {
+      const replayed = event as unknown as { type: string; content?: string; decision?: string };
+      const content =
+        replayed.type === "review_user" && replayed.decision === "revise"
+          ? `修正意见：${replayed.content ?? ""}`
+          : replayed.content ?? "";
+      if (content) emit({ role: "user", kind: "text", content });
+      return;
+    }
     switch (event.type) {
       case "dataset_added": {
         // 插补数据集：追加工作区但不切换 active，避免打断用户当前查看的数据

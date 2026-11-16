@@ -52,6 +52,7 @@
 
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
+| 2026-11-16 | 需求 | 036 会话消息流完整回放（035 增强）：用户动作（chat/确认/审阅/选项/类型确认/装配链等 9 类）在 `service.handle` 入口统一记入事件流为 `<event>_user` 帧（占 seq、不实时广播、内容精简只含 content/decision/option_id）；重连回放自然包含用户帧，前端按 `*_user` 后缀渲染用户气泡（review_user(revise) 渲染修正意见），刷新/重启后聊天上下文完整重建；回放帧经 ws 裸发通道不写回事件流（幂等，回放区间帧内容与顺序不变）；`events.jsonl` 增加轮转（超阈值保留尾部一半，seq 内存计数器不回退） | 035 明确的后续项：用户自己发的消息不在事件流中，刷新/重启后聊天上下文断裂；后端 444 passed、前端 72 passed |
 | 2026-11-16 | 需求 | 统计层三处中危修复（审查遗留）：M8 Schoenfeld PH 检查按事件掩码排除删失行（statsmodels 0.14 残差删失行置 0，此前伪 0 与删失大时间稀释 Spearman rho、PH 违反检出率下降）；M19 MICE 插补间方差只在缺失格计算（此前观测格方差恒 0 计入均值，按缺失占比系统性低估）；M20 插补产物按 `_step_index` 命名 `imputed_step_{i}.csv`（此前固定名，同计划两次插补互相覆盖）；registry `execute_step` 注入 `_step_index` 内部键 | 代码审查遗留 P2 正确性尾差；确定性测试守护（FakeModel 残差 / FakeImputer 确定性填充 / 双产物共存断言）；后端 441 passed |
 | 2026-11-16 | 需求 | 035 WS 断线重连 + 历史回放：出站帧经 `EventLog` 注入单调 `seq` 并追加落盘 `events.jsonl`（落盘失败降级仅投递）；`resume` 扩展 `last_seq` 缺口补发（原帧原 seq 绕过包装，不重复投递），后端重启后 seq 续接回放；前端 `connectSession` 非手动断线自动重连（指数退避 1s→2s→…上限 10s，成功后重置）+ 重连携带 `resume`+`last_seq` + 头部连接状态徽标（已连接/重连中呼吸动画） | 审查 H2：断线后消息静默丢弃界面卡死；032 快照仅恢复状态不恢复事件流；入站用户消息回放不做（备注后续） |
 | 2026-11-16 | 需求 | 034 工作链模板保存与复用：`session/templates.py` TemplateStore（`data_root/templates/*.json` 原子写、同名覆盖、损坏文件跳过）+ `GET/PUT/DELETE /templates[/{name}]`（模板名宿主校验防路径穿越、steps 方法注册校验）；装配 Tab 新增「我的工作链」区（命名保存/一键载入/删除，跨会话复用）；目标列快捷勾选（全部数值列/全部类别列/全选/清空，App 传入 columnTypes）；`tool_catalog` 输出 `accepts`（列类型预过滤数据基础，硬过滤留后续） | 033 产品闭环补全：装配成果此前一次性，无法沉淀为可复用资产；后端 434 passed、前端 67 passed |

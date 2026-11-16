@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+EVENT_LOG_MAX_LINES = 2000  # 轮转：超过该行数时重写为尾部 N 行
+
 
 class EventLog:
     """每会话一份事件日志：`<root>/<session_id>/events.jsonl`，一行一帧。"""
@@ -47,11 +49,24 @@ class EventLog:
         try:
             path = self._file(session_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as out:
-                out.write(json.dumps(frame, ensure_ascii=False, default=str) + "\n")
+            self._append_with_rotation(path, frame)
         except OSError:
             pass
         return frame
+
+    def _append_with_rotation(self, path: pathlib.Path, frame: dict) -> None:
+        """追加一帧；超过 EVENT_LOG_MAX_LINES 时重写为尾部一半（seq 内存计数器不受影响）。"""
+        if path.is_file() and path.stat().st_size > 0:
+            with open(path, "r", encoding="utf-8") as existing:
+                lines = existing.readlines()
+            lines.append(json.dumps(frame, ensure_ascii=False, default=str) + "\n")
+            if len(lines) > EVENT_LOG_MAX_LINES:
+                lines = lines[len(lines) // 2 :]
+            with open(path, "w", encoding="utf-8") as out:
+                out.writelines(lines)
+        else:
+            with open(path, "a", encoding="utf-8") as out:
+                out.write(json.dumps(frame, ensure_ascii=False, default=str) + "\n")
 
     def read_after(self, session_id: str, last_seq: int) -> list[dict]:
         """读取 seq 大于 last_seq 的全部历史帧（损坏行跳过）。"""
