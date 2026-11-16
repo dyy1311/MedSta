@@ -116,3 +116,60 @@ def test_reports_are_scoped_per_session(client, app, session_id: str) -> None:
         assert client.get(f"/export/{other}/0?format=csv").status_code == 404
 
     assert other not in app.state.service.reports
+
+
+def _inject_formula_report(app, session_id: str) -> None:
+    """注入含公式注入载体的报告表格（模拟用户上传数据里的恶意标签）。"""
+    app.state.service.reports[session_id] = {
+        "steps": [
+            {
+                "title": "注入表",
+                "method": "describe",
+                "status": "success",
+                "table": {
+                    "columns": ["label", "value"],
+                    "rows": [
+                        {"label": "=cmd|' /C calc'!A0", "value": 1},
+                        {"label": "+2+3", "value": -5.5},
+                        {"label": "@SUM(A1)", "value": 2},
+                        {"label": "正常文本", "value": 3.5},
+                    ],
+                },
+                "result": {},
+                "artifact": None,
+                "error": None,
+            }
+        ]
+    }
+
+
+def test_csv_export_escapes_formula_prefixes(client, app, session_id: str) -> None:
+    """P1: CSV 导出对以 = + - @ 开头的文本单元格加 ' 前缀；纯数值（含负数）不动。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=csv")
+
+    assert resp.status_code == 200
+    frame = pd.read_csv(
+        io.BytesIO(resp.content), encoding="utf-8-sig", dtype=str, keep_default_na=False
+    )
+    labels = frame["label"].tolist()
+    assert labels[0].startswith("'=")
+    assert labels[1].startswith("'+")
+    assert labels[2].startswith("'@")
+    assert labels[3] == "正常文本"
+    # 数值列保持原样（负数不受影响；dtype=str 读回统一为浮点表示）
+    assert [float(v) for v in frame["value"].tolist()] == [1.0, -5.5, 2.0, 3.5]
+
+
+def test_xlsx_export_escapes_formula_prefixes(client, app, session_id: str) -> None:
+    """P1: XLSX 导出同样转义公式前缀（openpyxl 会把 = 开头字符串存为公式）。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=xlsx")
+
+    assert resp.status_code == 200
+    frame = pd.read_excel(io.BytesIO(resp.content), engine="openpyxl", dtype=str)
+    labels = frame["label"].tolist()
+    assert labels[0].startswith("'=")
+    assert not any(str(cell).startswith("=") for cell in labels)

@@ -22,6 +22,24 @@ class SessionStatus(str, Enum):
     DELIVERED = "delivered"
 
 
+class InvalidStateTransition(ValueError):
+    """非法状态转移（协议顺序错误，宿主确定性判定）。"""
+
+
+# 允许的转移表（源状态 → 目标状态集合）：宿主强约束，非各 handler 自觉。
+# 讨论 → 图表配置/执行；执行 → 交付或失败/中断回讨论；交付后修正回讨论。
+_ALLOWED_TRANSITIONS: dict[SessionStatus | None, set[SessionStatus]] = {
+    SessionStatus.DISCUSSING: {
+        SessionStatus.DISCUSSING,
+        SessionStatus.PLAN_CONFIRMED,
+        SessionStatus.EXECUTING,
+    },
+    SessionStatus.PLAN_CONFIRMED: {SessionStatus.EXECUTING, SessionStatus.DISCUSSING},
+    SessionStatus.EXECUTING: {SessionStatus.DELIVERED, SessionStatus.DISCUSSING},
+    SessionStatus.DELIVERED: {SessionStatus.DISCUSSING, SessionStatus.DELIVERED},
+}
+
+
 @dataclass
 class SessionData:
     df: pd.DataFrame
@@ -118,6 +136,12 @@ class SessionManager:
 
     def transition(self, session_id: str, status: SessionStatus) -> Session:
         session = self._sessions[session_id]
+        allowed = _ALLOWED_TRANSITIONS.get(session.status, set())
+        if status not in allowed:
+            raise InvalidStateTransition(
+                f"非法状态转移：{session.status.value} → {status.value}（"
+                f"允许：{', '.join(sorted(s.value for s in allowed))}）"
+            )
         session.status = status
         return session
 

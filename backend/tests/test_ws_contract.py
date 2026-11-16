@@ -220,3 +220,16 @@ def test_revise_returns_to_discussion_with_note(client, app, session_id: str) ->
 
         assert "继续讨论" in back["message"]
         assert manager.get(session_id).status.value == "discussing"
+
+
+def test_ws_rejects_malformed_frame_without_dropping(client, app, session_id: str) -> None:
+    """P1: 非 JSON 帧回 INVALID_PARAM 错误帧且连接保持可用，不再整条断开。"""
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_text("not-json{{")
+        _, error = collect_until(ws, {"error"})
+        assert error["code"] == "INVALID_PARAM"
+
+        # 连接仍可用：后续合法协议错误照常响应
+        ws.send_json({"type": "bogus_after_bad_frame"})
+        _, second = collect_until(ws, {"error"})
+        assert second["code"] == "PROTOCOL_UNSUPPORTED"

@@ -14,6 +14,8 @@ from medsta.session.manager import manager
 router = APIRouter()
 
 _DEFAULT_DATA_ROOT = pathlib.Path(os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 上传大小上限：50MB，防磁盘/内存耗尽
+_COPY_CHUNK = 1024 * 1024
 
 
 def _data_root(request: Request) -> pathlib.Path:
@@ -35,8 +37,21 @@ async def upload_data(session_id: str, file: UploadFile, request: Request) -> di
     dataset_id = uuid.uuid4().hex[:8]
     target = data_root / session_id / dataset_id / f"dataset{suffix}"
     target.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
     with target.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+        while True:
+            chunk = file.file.read(_COPY_CHUNK)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                out.close()
+                target.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件超过大小上限（{MAX_UPLOAD_BYTES // (1024 * 1024)}MB），请精简后重试",
+                )
+            out.write(chunk)
     try:
         df = load_table(str(target))
     except Exception as exc:  # 解析失败必须可分类，不能冒泡成 500

@@ -36,6 +36,21 @@ def test_upload_data_returns_profile() -> None:
     assert body["profile"]["column_count"] == 2
 
 
+def test_upload_rejects_oversized_file(monkeypatch) -> None:
+    """P1: 超过大小上限的上传被拒绝（413），不进入解析。"""
+    client, session_id = _client_with_session()
+    monkeypatch.setattr("medsta.api.routes_data.MAX_UPLOAD_BYTES", 64)
+    oversized = b"group,value\n" + b"A,1.0\n" * 20  # > 64 bytes
+
+    resp = client.post(
+        f"/sessions/{session_id}/data",
+        files={"file": ("big.csv", io.BytesIO(oversized), "text/csv")},
+    )
+
+    assert resp.status_code == 413
+    assert "上限" in resp.json()["detail"]
+
+
 # ---- SessionService 编排测试（模拟模型） ----
 
 import pytest

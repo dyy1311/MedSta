@@ -17,7 +17,7 @@ from medsta.config import InterpretConfig
 from medsta.data.profiler import VALID_COLUMN_TYPES, apply_column_type, profile_dataframe
 from medsta.errors import AppError, ErrorCode, ToolValidationError
 from medsta.pipeline.workflow import AnalysisWorkflow
-from medsta.session.manager import SessionStatus, manager
+from medsta.session.manager import InvalidStateTransition, SessionStatus, manager
 
 SendFn = Callable[[dict], Awaitable[None]]
 
@@ -61,6 +61,7 @@ class SessionService:
         self._pending_chats: dict[str, str] = {}
         self._plans: dict[str, AnalysisPlan] = {}
         self._requests: dict[str, str] = {}
+        self._busy: set[str] = set()  # 同会话任务忙标记：防 chat/答疑并发竞态
         self._interpret_agent = interpret_agent
         self._interpret_config = interpret_config or InterpretConfig.from_env()
         self._interpret_tasks: dict[str, asyncio.Task] = {}
@@ -168,7 +169,17 @@ class SessionService:
                 ).to_event()
             )
             return
-        await handler(session_id, event, send)
+        try:
+            await handler(session_id, event, send)
+        except InvalidStateTransition as exc:
+            # 状态机转移守卫：协议顺序错误对客户端可见而非断连
+            await send(
+                AppError(
+                    ErrorCode.PROTOCOL_UNSUPPORTED,
+                    str(exc),
+                    hint="当前会话状态不支持该操作；请刷新页面同步最新状态",
+                ).to_event()
+            )
 
     async def _on_chat(self, session_id: str, event: dict, send: SendFn) -> None:
         session = manager.get(session_id)
@@ -209,6 +220,16 @@ class SessionService:
             # 交付态默认答疑：不产新方案，避免用户追问被误当成重规划
             await self._answer(session_id, str(event.get("content", "")), send)
             return
+        if session_id in self._busy:
+            await send(
+                AppError(
+                    ErrorCode.SESSION_BUSY,
+                    "当前会话有任务进行中",
+                    hint="等待任务完成，或先发送 interrupt 中断",
+                ).to_event()
+            )
+            return
+        self._busy.add(session_id)
         task = asyncio.create_task(
             self._generate_plan(session_id, str(event.get("content", "")), send)
         )
@@ -294,6 +315,7 @@ class SessionService:
             )
         finally:
             self._tasks.pop(session_id, None)
+            self._busy.discard(session_id)
 
     async def _on_confirm(self, session_id: str, event: dict, send: SendFn) -> None:
         session = manager.get(session_id)
@@ -359,6 +381,16 @@ class SessionService:
                 if step.chart_type != "none":
                     step.params["_layout"] = layout
         await self._execute_plan(session_id, send)
+
+    async def _teardown_workflow(self, session_id: str, reason: str) -> None:
+        """取消并清理会话当前的工作流与执行句柄（超时/中断路径共用）。"""
+        workflow = self._workflows.pop(session_id, None)
+        execution = self._executions.pop(session_id, None)
+        if workflow is not None and execution is not None:
+            try:
+                await workflow.cancel(execution, reason=reason)
+            except Exception:
+                pass
 
     async def _execute_plan(self, session_id: str, send: SendFn) -> None:
         print(f"[flow] _execute_plan enter {session_id[:8]}", flush=True)
@@ -430,6 +462,18 @@ class SessionService:
         except AppError as exc:
             manager.transition(session_id, SessionStatus.DISCUSSING)
             await send(exc.to_event())
+        except TimeoutError as exc:
+            # 审阅等待超时：必须取消工作流并清理残留执行，
+            # 否则残留 interrupt 之后仍可被 review:accept 交付掉
+            await self._teardown_workflow(session_id, reason="review timeout")
+            manager.transition(session_id, SessionStatus.DISCUSSING)
+            await send(
+                AppError(
+                    ErrorCode.EXECUTION_FAILED,
+                    str(exc),
+                    hint="请重新确认方案执行；若持续出现请查看后端日志",
+                ).to_event()
+            )
         except Exception as exc:
             manager.transition(session_id, SessionStatus.DISCUSSING)
             await send(
@@ -550,6 +594,16 @@ class SessionService:
             return
         await self._record(session_id, "user_message", {"content": question})
         await send({"type": "progress", "stage": "answering", "message": "正在结合交付结果回答…"})
+        if session_id in self._busy:
+            await send(
+                AppError(
+                    ErrorCode.SESSION_BUSY,
+                    "当前会话有任务进行中",
+                    hint="等待任务完成，或先发送 interrupt 中断",
+                ).to_event()
+            )
+            return
+        self._busy.add(session_id)
         self._tasks[session_id] = asyncio.create_task(
             self._answer_task(session_id, question, plan, report, session.data.profile, send)
         )
@@ -590,6 +644,8 @@ class SessionService:
             return
         await send({"type": "answer", **reply.model_dump()})
         await self._record(session_id, "answer", {"question": question, **reply.model_dump()})
+        self._tasks.pop(session_id, None)
+        self._busy.discard(session_id)
 
     @staticmethod
     def _plot_options(plan_step: Any, df: pd.DataFrame | None = None) -> list[str]:
@@ -805,6 +861,7 @@ class SessionService:
             except Exception:
                 pass
             self._executions.pop(session_id, None)
+            self._workflows.pop(session_id, None)
         session = manager.get(session_id)
         if session is not None and session.status != SessionStatus.DELIVERED:
             manager.transition(session_id, SessionStatus.DISCUSSING)
