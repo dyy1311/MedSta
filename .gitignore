@@ -38,3 +38,6 @@ docs/*.pdf
 .idea/
 .vscode/
 .DS_Store
+
+# AI 协作工具产物（计划文件，不入库）
+.codebuddy/

@@ -11,7 +11,7 @@ mamba activate Sta
 # 后端依赖安装（pip 直连困难时加 -i https://pypi.tuna.tsinghua.edu.cn/simple）
 cd backend && pip install -e ".[dev]"
 
-# 运行全部后端测试（当前 357 collected：356 passed + 1 项真模型 skip）
+# 运行全部后端测试（当前 365 collected：364 passed + 1 项真模型跳过）
 cd backend && pytest
 
 # 运行单个测试
@@ -55,6 +55,7 @@ Spec 驱动 + TDD，规则详见 `spec/README.md`：
 3. implementing 中按行为列表垂直切片：一条行为 → 一个测试（先确认 RED）→ 最小实现（GREEN）→ 下一行为。禁止先写全部测试再写全部实现。测试走公共接口，仅模型调用与文件系统边界 mock。
 4. 未进 implementing 不写实现；行为未全绿不算完成；全绿后迁入 done。
 5. **每次变更必须同时**：在 `docs/timeline.md` **顶部**追加一行（`日期 ｜ 类型 ｜ 内容 ｜ 原因/依据`，类型限 `迁移/环境/规范/结构/选型/需求`，严格倒序；目录重组、规范变更、选型定稿、spec 回退必须留条目），并更新 `TO_DO.md` 的进行中与已完成清单；跨模块架构决策的完整推理记入 `docs/design-notes.md`。三者缺一视为变更未完成。
+6. **文档分工**：`README.md` 只作入口（不写易过期计数）；产品说明 `docs/product-guide.md`；架构与三张图 `docs/architecture.md`（唯一图源，其他文档只链接不复制）；统计口径 `docs/statistics-methods.md`；评估基线 `docs/evaluation-report.md`。`backend/tests/test_docs_consistency.py` 守护「附录工具清单 == 注册表」「无死链」「README 无具体计数」「三图非空」。
 
 ## 架构
 
