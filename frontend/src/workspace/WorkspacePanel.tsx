@@ -37,7 +37,16 @@ export default function WorkspacePanel({
       .map((step) => ({ report, step, reportIndex: report.steps.indexOf(step) }))
   );
   const charts = reports.flatMap((report) =>
-    report.steps.filter((step) => step.artifact).map((step) => step.artifact as string)
+    report.steps
+      .map((step, stepIndex) => ({
+        filename: step.artifact,
+        stepIndex,
+        reportId: report.report_id,
+      }))
+      .filter(
+        (item): item is { filename: string; stepIndex: number; reportId?: string } =>
+          Boolean(item.filename)
+      )
   );
 
   return (
@@ -130,8 +139,14 @@ export default function WorkspacePanel({
                       <div className="mb-1.5 flex items-center gap-2">
                         <span className="text-sm font-medium text-ink">{step.title}</span>
                         <a
-                          href={`/export/${sessionId}/${reportIndex}?format=csv${reportQuery(report)}`}
+                          href={`/export/${sessionId}/${reportIndex}?format=json${reportQuery(report)}`}
                           className="ml-auto cursor-pointer text-[11px] text-primary hover:underline"
+                        >
+                          JSON
+                        </a>
+                        <a
+                          href={`/export/${sessionId}/${reportIndex}?format=csv${reportQuery(report)}`}
+                          className="cursor-pointer text-[11px] text-primary hover:underline"
                         >
                           CSV
                         </a>
@@ -186,11 +201,17 @@ export default function WorkspacePanel({
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {charts.map((filename, index) => (
+                  {charts.map(({ filename, stepIndex, reportId }, index) => (
                     <ChartCard
                       key={`${filename}-${index}`}
                       baseUrl={`/data/${sessionId}/${active.datasetId}/artifacts`}
                       filename={filename}
+                      extraFormats={["JPG", "PDF", "TIF"].map((label) => ({
+                        label,
+                        href: `/export/${sessionId}/${stepIndex}?format=${label.toLowerCase()}${
+                          reportId ? `&report_id=${reportId}` : ""
+                        }`,
+                      }))}
                     />
                   ))}
                 </div>

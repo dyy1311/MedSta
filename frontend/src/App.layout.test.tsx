@@ -125,7 +125,8 @@ describe("App 布局骨架", () => {
     fireEvent.click(screen.getByRole("button", { name: /能力/ }));
 
     expect(await screen.findByText("统计能力披露")).toBeInTheDocument();
-    expect(screen.getByText("描述性统计")).toBeInTheDocument();
+    // 工具装配 Tab 的下拉也含工具名：用 getAllByText 容忍多处出现
+    expect(screen.getAllByText("描述性统计").length).toBeGreaterThan(0);
     expect(screen.getByText("生存分析")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "关闭能力抽屉" }));

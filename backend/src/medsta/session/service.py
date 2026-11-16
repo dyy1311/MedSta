@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 
 import pandas as pd
 
-from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, sap_status_of
+from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, PlanStep, sap_status_of
 from medsta.agents.interpretation import InterpretationAgent
 from medsta.config import InterpretConfig
 from medsta.data.parser import load_table
@@ -21,6 +21,7 @@ from medsta.errors import AppError, ErrorCode, ToolValidationError
 from medsta.pipeline.workflow import AnalysisWorkflow
 from medsta.session.manager import InvalidStateTransition, SessionStatus, manager
 from medsta.session.persistence import SNAPSHOT_VERSION, SessionStore
+from medsta.stats.registry import HARD_ISSUE_CODES, ToolIssue, get_tool, validate_plan
 
 SendFn = Callable[[dict], Awaitable[None]]
 
@@ -225,6 +226,10 @@ class SessionService:
     def report_history(self) -> dict[str, dict[str, dict]]:
         return self._report_history
 
+    @property
+    def plans(self) -> dict[str, AnalysisPlan]:
+        return self._plans
+
     def set_column_type(
         self, session_id: str, dataset_id: str, column: str, new_type: str
     ) -> dict:
@@ -281,6 +286,7 @@ class SessionService:
             "chart_choice": self._on_chart_choice,
             "type_confirm": self._on_type_confirm,
             "plot_later": self._on_plot_later,
+            "run_chain": self._on_run_chain,
         }.get(event_type)
         if handler is None:
             await send(
@@ -514,6 +520,105 @@ class SessionService:
                 await workflow.cancel(execution, reason=reason)
             except Exception:
                 pass
+
+    async def _on_run_chain(self, session_id: str, event: dict, send: SendFn) -> None:
+        """用户装配的原子工具链：宿主校验后构造手动计划执行，全程无模型参与。
+
+        图表在装配时已选定，直接执行（跳过出图确认暂停）；
+        交付态装配新链视为回到讨论态（delivered → discussing → executing）。
+        """
+        session = manager.get(session_id)
+        if session is None or session.data is None:
+            await send(
+                AppError(ErrorCode.DATA_REQUIRED, "尚未上传数据", hint="先上传 CSV/Excel").to_event()
+            )
+            return
+        if session_id in self._busy:
+            await send(
+                AppError(
+                    ErrorCode.SESSION_BUSY,
+                    "当前会话有任务进行中",
+                    hint="等待任务完成，或先发送 interrupt 中断",
+                ).to_event()
+            )
+            return
+        raw_steps = event.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            await send(
+                AppError(
+                    ErrorCode.INVALID_PARAM,
+                    "工作链为空",
+                    hint="至少装配一个统计工具再执行",
+                ).to_event()
+            )
+            return
+        plan_steps = []
+        unknown_issues = []
+        for index, raw in enumerate(raw_steps):
+            if not isinstance(raw, dict):
+                await send(
+                    AppError(
+                        ErrorCode.INVALID_PARAM,
+                        f"步骤 {index + 1} 不是对象",
+                        hint="每个步骤需包含 method/target_columns/chart_type/params",
+                    ).to_event()
+                )
+                return
+            method = str(raw.get("method", ""))
+            # PlanStep.method 是 Literal 枚举：先在宿主侧校验方法名，避免 pydantic 裸错
+            if get_tool(method) is None:
+                unknown_issues.append(
+                    ToolIssue(
+                        code="TOOL_NOT_FOUND",
+                        message=f"步骤 {index + 1} 引用了未知统计工具：{method}",
+                        hint="从能力目录（/capabilities）中选择已登记的工具",
+                        step_index=index,
+                    )
+                )
+                continue
+            plan_steps.append(
+                PlanStep(
+                    title=str(raw.get("title") or method or f"步骤 {index + 1}"),
+                    method=method,
+                    target_columns=[str(c) for c in (raw.get("target_columns") or [])],
+                    chart_type=str(raw.get("chart_type") or "none"),
+                    params=dict(raw.get("params") or {}),
+                    rationale="用户装配",
+                )
+            )
+        if unknown_issues:
+            await send(
+                {
+                    "type": "error",
+                    "code": ErrorCode.INVALID_PLAN.value,
+                    "message": "工作链未通过校验",
+                    "hint": "检查各步骤的方法参数与目标列（详见 issues）",
+                    "detail": {"issues": [issue.model_dump() for issue in unknown_issues]},
+                }
+            )
+            return
+        plan = AnalysisPlan(message="手动装配工作链", steps=plan_steps)
+        issues = validate_plan(plan, session.data.df)
+        hard = [issue for issue in issues if issue.code in HARD_ISSUE_CODES]
+        if hard:
+            await send(
+                {
+                    "type": "error",
+                    "code": ErrorCode.INVALID_PLAN.value,
+                    "message": "工作链未通过校验",
+                    "hint": "检查各步骤的方法参数与目标列（详见 issues）",
+                    "detail": {"issues": [issue.model_dump() for issue in hard]},
+                }
+            )
+            return
+        self._busy.add(session_id)
+        try:
+            if session.status == SessionStatus.DELIVERED:
+                manager.transition(session_id, SessionStatus.DISCUSSING)
+            session.plan = plan
+            await self._execute_plan(session_id, send)
+        finally:
+            self._busy.discard(session_id)
 
     async def _execute_plan(self, session_id: str, send: SendFn) -> None:
         print(f"[flow] _execute_plan enter {session_id[:8]}", flush=True)

@@ -98,3 +98,27 @@ def test_no_deprecated_phrasing(phrase: str) -> None:
     """B6: 已过期的表述不得复发。"""
     for path in (README, ARCH, GUIDE, STATS):
         assert phrase not in _read(path), f"{path.name} 仍含过期表述「{phrase}」"
+
+
+def test_tools_md_matches_registry() -> None:
+    """B7(033): tools.md 双向登记全部统计工具与作图类型，不得缺漏或含已注销工具。"""
+    tools_md = REPO_ROOT / "docs" / "tools.md"
+    text = _read(tools_md)
+
+    marker = "## 统计工具"
+    assert marker in text, "tools.md 缺少「统计工具」小节"
+    tool_section = text.split(marker, 1)[1].split("\n## ", 1)[0]
+    listed = set(re.findall(r"^\|\s*`([a-z_]+)`", tool_section, re.M))
+    missing = sorted(_registered_tools() - listed)
+    stale = sorted(listed - _registered_tools())
+    assert missing == [], f"tools.md 缺登记工具：{missing}"
+    assert stale == [], f"tools.md 含已注销工具：{stale}"
+
+    from medsta.stats.plotting import CHART_LABELS
+    from medsta.stats.registry import CHART_TYPES
+
+    for chart in CHART_TYPES:
+        if chart == "none":
+            continue
+        assert f"`{chart}`" in text, f"tools.md 缺作图类型：{chart}"
+        assert CHART_LABELS.get(chart, chart) in text, f"tools.md 缺图表中文名：{chart}"

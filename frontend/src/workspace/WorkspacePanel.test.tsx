@@ -188,12 +188,23 @@ describe("ChartCard", () => {
     expect(container.querySelectorAll("img")).toHaveLength(1);
   });
 
-  it("提供下载链接", () => {
-    render(<ChartCard baseUrl="/data/s1/d1/artifacts" filename="chart.png" />);
+  it("提供下载链接与多格式导出", () => {
+    render(
+      <ChartCard
+        baseUrl="/data/s1/d1/artifacts"
+        filename="chart.png"
+        extraFormats={[
+          { label: "JPG", href: "/export/s1/0?format=jpg" },
+          { label: "PDF", href: "/export/s1/0?format=pdf" },
+        ]}
+      />
+    );
 
-    const download = screen.getByTitle("下载");
+    const download = screen.getByTitle("下载 PNG");
     expect(download).toHaveAttribute("href", "/data/s1/d1/artifacts/chart.png");
     expect(download).toHaveAttribute("download", "chart.png");
+    expect(screen.getByTitle("下载 JPG")).toHaveAttribute("href", "/export/s1/0?format=jpg");
+    expect(screen.getByTitle("下载 PDF")).toHaveAttribute("href", "/export/s1/0?format=pdf");
   });
 
   it("报告带 report_id 时导出链接携带该参数（历史报告可寻址导出）", () => {

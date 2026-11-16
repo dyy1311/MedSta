@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import io
 from urllib.parse import unquote
 
@@ -11,6 +12,7 @@ from medsta.session.manager import manager
 
 from tests.helpers import (
     PLAN_NO_TABLE,
+    PLAN_TABLE_ONLY,
     PLAN_WITH_CHART,
     collect_until,
     drive_to_review,
@@ -29,7 +31,7 @@ def test_csv_export_is_utf8_sig_and_matches_table(client, app, session_id: str) 
         assert step["table"]["columns"][:3] == ["column", "count", "mean"]
 
         resp = client.get(f"/export/{session_id}/0?format=csv")
-        assert client.get(f"/export/{session_id}/0?format=pdf").status_code == 400
+        assert client.get(f"/export/{session_id}/0?format=docx").status_code == 400
         assert client.get(f"/export/{session_id}/99?format=csv").status_code == 404
 
     assert resp.status_code == 200
@@ -218,3 +220,42 @@ def test_export_by_report_id_targets_history_report(client, app, session_id: str
     assert b"age" in old.content
     assert b"value" in new.content
     assert b"value" in default.content  # 缺省 = 最新
+
+
+def test_export_step_as_json(client, app, session_id: str) -> None:
+    """B5: format=json 返回完整步骤 JSON（meta/table/result），严格 JSON 无 NaN。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=json")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    payload = json.loads(resp.content.decode("utf-8"))
+    assert payload["meta"]["step_index"] == 0
+    assert payload["meta"]["tool"] == "describe"
+    assert payload["table"]["columns"] == ["label", "value"]
+    assert payload["result"] == {}
+
+
+def test_export_chart_formats(client, app, session_id: str) -> None:
+    """B6: 图导出支持 jpg/pdf/tif（按需重渲染），Content-Type 正确且内容非空。"""
+    app.state.service.set_agent(fake_agent(PLAN_WITH_CHART))
+    upload_csv(client, session_id)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)
+
+    for fmt, ctype in (("jpg", "image/jpeg"), ("pdf", "application/pdf"), ("tif", "image/tiff")):
+        resp = client.get(f"/export/{session_id}/0?format={fmt}")
+        assert resp.status_code == 200, fmt
+        assert resp.headers["content-type"].startswith(ctype), fmt
+        assert len(resp.content) > 1000, fmt
+
+    # 无图步骤导出图格式 → 404（类型已确认的会话：chat 直接出 plan，无 type_review）
+    app.state.service.set_agent(fake_agent(PLAN_TABLE_ONLY))
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_json({"type": "chat", "content": "只出统计表"})
+        _, plan_event = collect_until(ws, {"plan"})
+        assert plan_event["steps"][0]["method"] == "describe"
+        ws.send_json({"type": "confirm_plan"})
+        collect_until(ws, {"review_request"})
+    assert client.get(f"/export/{session_id}/0?format=pdf").status_code == 404

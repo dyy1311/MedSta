@@ -1,13 +1,25 @@
-"""分析结果导出：可视化表格 → CSV / Excel。"""
+"""分析结果导出：可视化表格 → CSV / Excel / JSON；图表 → PNG / JPG / PDF / TIF。"""
 from __future__ import annotations
 
 import io
+import pathlib
+import json
+from urllib.parse import quote
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from medsta.session.manager import manager
+
 router = APIRouter()
+
+_IMAGE_MEDIA_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "pdf": "application/pdf",
+    "tif": "image/tiff",
+}
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
 
@@ -51,6 +63,57 @@ def export_step(
 
     frame = _sanitize_frame(pd.DataFrame(table["rows"], columns=table["columns"]))
     safe_title = step.get("title", f"step_{step_index}").replace("/", "_")[:40]
+
+    if format == "json":
+        # JSON 硬要求：分析数据以原始 JSON 输出（result + table + meta），前端不直接展示 JSON
+        payload = {
+            "meta": {
+                "session_id": session_id,
+                "step_index": step_index,
+                "tool": step.get("method"),
+                "title": step.get("title"),
+                "status": step.get("status"),
+                "report_id": report_id or (report.get("report_id") if isinstance(report, dict) else None),
+            },
+            "table": table,
+            "result": step.get("result", {}),
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False, allow_nan=False, default=str),
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'{safe_title}.json')}"
+            },
+        )
+
+    if format in _IMAGE_MEDIA_TYPES:
+        # 图多格式导出：按需重渲染（PNG 落盘产物之外按请求生成）
+        plan = request.app.state.service.plans.get(session_id)
+        session = manager.get(session_id)
+        if plan is None or session is None or session.data is None or step_index >= len(plan.steps):
+            raise HTTPException(status_code=404, detail="该步骤无可导出的图表")
+        plan_step = plan.steps[step_index]
+        if plan_step.chart_type == "none":
+            raise HTTPException(status_code=404, detail="该步骤未配置图表，无法导出图片")
+        from medsta.stats.plotting import render_chart
+
+        artifact_dir = pathlib.Path(session.data.artifact_dir)
+        path = render_chart(
+            session.data.df,
+            plan_step,
+            artifact_dir,
+            step_index,
+            result=step.get("result", {}),
+            image_format=format,
+        )
+        return Response(
+            content=path.read_bytes(),
+            media_type=_IMAGE_MEDIA_TYPES[format],
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(path.name)}"
+            },
+        )
+
     if format == "csv":
         content = frame.to_csv(index=False).encode("utf-8-sig")
         media = "text/csv; charset=utf-8"
@@ -64,8 +127,6 @@ def export_step(
         filename = f"{safe_title}.xlsx"
     else:
         raise HTTPException(status_code=400, detail=f"不支持的导出格式：{format}")
-
-    from urllib.parse import quote
 
     return Response(
         content=content,

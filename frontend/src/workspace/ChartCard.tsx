@@ -4,9 +4,11 @@ import { useState } from "react";
 interface Props {
   baseUrl: string; // 例如 /data/{sid}/{datasetId}/artifacts
   filename: string;
+  /** 额外导出格式（033）：JPG/PDF/TIF 走导出端点按需重渲染 */
+  extraFormats?: { label: string; href: string }[];
 }
 
-export default function ChartCard({ baseUrl, filename }: Props) {
+export default function ChartCard({ baseUrl, filename, extraFormats = [] }: Props) {
   const [zoomed, setZoomed] = useState(false);
   const [failed, setFailed] = useState(false);
   const src = `${baseUrl}/${filename}`;
@@ -33,10 +35,20 @@ export default function ChartCard({ baseUrl, filename }: Props) {
             href={src}
             download={filename}
             className="cursor-pointer rounded-lg bg-white/90 p-1.5 text-primary-dark transition-colors hover:bg-white"
-            title="下载"
+            title="下载 PNG"
           >
             <Download className="h-4 w-4" />
           </a>
+          {extraFormats.map((item) => (
+            <a
+              key={item.label}
+              href={item.href}
+              className="cursor-pointer rounded-lg bg-white/90 px-1.5 py-1 text-[10px] font-medium text-primary-dark transition-colors hover:bg-white"
+              title={`下载 ${item.label}`}
+            >
+              {item.label}
+            </a>
+          ))}
         </div>
       </div>
 

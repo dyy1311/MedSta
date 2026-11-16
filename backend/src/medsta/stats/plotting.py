@@ -94,7 +94,12 @@ def chart_title(step: Any, index: int) -> str:
 
 
 def render_chart(
-    df: pd.DataFrame, step: Any, artifact_dir: pathlib.Path, index: int, result: Any = None
+    df: pd.DataFrame,
+    step: Any,
+    artifact_dir: pathlib.Path,
+    index: int,
+    result: Any = None,
+    image_format: str = "png",
 ) -> pathlib.Path:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
@@ -258,7 +263,8 @@ def render_chart(
 
     ax.set_title(chart_title(step, index))
     fig.tight_layout()
-    path = artifact_dir / f"step_{index}_{step.method}_{chart}.png"
+    suffix = "jpg" if image_format == "jpg" else image_format
+    path = artifact_dir / f"step_{index}_{step.method}_{chart}.{suffix}"
     fig.savefig(path, dpi=110)
     plt.close(fig)
     return path

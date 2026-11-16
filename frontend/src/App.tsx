@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BarChart3, Boxes, MessagesSquare } from "lucide-react";
+import { BarChart3, Boxes, MessagesSquare, Wrench } from "lucide-react";
 import type {
   ChartConfigRequest, ChatMessage, ExecutionReport, Phase, PlotSuggestStep,
   TableProfile, TypeReviewRequest, WsEvent, WorkspaceTab,
@@ -11,12 +11,31 @@ import CapabilityDrawer from "./chat/CapabilityDrawer";
 import SessionTabs from "./chat/SessionTabs";
 import type { ChatSessionEntry } from "./chat/SessionTabs";
 import WorkspacePanel from "./workspace/WorkspacePanel";
+import ChainBuilder from "./builder/ChainBuilder";
+import type { ChainStep } from "./builder/ChainBuilder";
 
 function upsertReport(reports: ExecutionReport[], report: ExecutionReport, replaceLast: boolean) {
   const next = [...reports];
   if (replaceLast && next.length > 0) next[next.length - 1] = report;
   else next.push(report);
   return next;
+}
+
+/** 最新一条模型方案的步骤（作为装配起点导入） */
+function latestPlanSteps(messages: ChatMessage[]): ChainStep[] | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.kind === "plan" && Array.isArray(message.steps) && message.steps.length > 0) {
+      return message.steps.map((step) => ({
+        method: step.method,
+        title: step.title,
+        target_columns: [...step.target_columns],
+        chart_type: step.chart_type,
+        params: { ...step.params },
+      }));
+    }
+  }
+  return null;
 }
 
 export default function App() {
@@ -42,7 +61,7 @@ export default function App() {
   const [plotSuggest, setPlotSuggest] = useState<PlotSuggestStep[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "workspace" | "builder">("chat");
   const [uploading, setUploading] = useState(false);
 
   const messages = activeChatIdResolved ? messagesBySession[activeChatIdResolved] ?? [] : [];
@@ -455,10 +474,11 @@ export default function App() {
             {[
               { key: "chat", label: `会话（${chatSessions.length}）`, icon: MessagesSquare },
               { key: "workspace", label: `工作区（${workspaces.length}）`, icon: BarChart3 },
+              { key: "builder", label: "工具装配", icon: Wrench },
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
-                onClick={() => setActiveTab(key as "chat" | "workspace")}
+                onClick={() => setActiveTab(key as "chat" | "workspace" | "builder")}
                 className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   activeTab === key ? "bg-white text-primary-dark" : "text-white/80 hover:text-white"
                 }`}
@@ -534,6 +554,22 @@ export default function App() {
             onActivate={handleActivateWorkspace}
             onUpload={(file) => void handleUpload(file)}
             onSetColumnType={handleSetColumnType}
+          />
+        </section>
+        <section
+          className={`min-h-0 flex-1 bg-surface-card/60 ${
+            activeTab === "builder" ? "flex" : "hidden xl:flex"
+          } flex-col`}
+        >
+          <ChainBuilder
+            sessionId={activeChat?.sessionId ?? ""}
+            columns={Object.keys(activeWorkspace?.profile.columns ?? {})}
+            busy={phase === "thinking" || phase === "executing"}
+            importSteps={activeChat ? latestPlanSteps(messages) : null}
+            onRun={(steps) => {
+              sendWs({ type: "run_chain", steps });
+              setActiveTab("workspace");
+            }}
           />
         </section>
       </main>
