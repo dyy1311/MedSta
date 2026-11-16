@@ -7,7 +7,7 @@
 
 | 任务 | 状态 | 说明 |
 |---|---|---|
-| — | 暂无 | 030（阶段评估与 P0 修复）已完成，评估报告基线更新至 029（综合 7.9）；下一项从下方 P1-1 启动 |
+| — | 暂无 | 031（架构图与说明文档）已完成，三张图与产品说明就位；下一项从下方 P1-1 启动 |
 
 ## 下一步（按「用户可见价值 × 依赖关系 × 成本」排序）
 
@@ -43,6 +43,8 @@
 
 | 任务 | 完成日期 | 产出 |
 |---|---|---|
+| P0/P1 审查修复批 | 2026-10-24 | 统计正确性七处（Breslow w²、RMST 组间 tau、McNemar 分类豁免、AUC 平均秩、配对 bootstrap 差值重抽样、Fisher 路径 Cramér's V、卡方星号顺序）；SPA 路径穿越（resolve 前缀校验）、导出公式注入转义、上传 50MB 限额；状态机转移表 + SESSION_BUSY 忙锁 + WS 错误帧兜底 + 执行 to_thread 化 + 审阅超时语义；matplotlib>=3.9；前端 estimand 透传；后端 382 passed、前端 52 passed |
+| 架构图与说明文档（031） | 2026-10-23 | `docs/architecture.md` 三张 Mermaid 图（分层架构 / 统计策略选择 / 执行流程）+ 22 工具附录与事件状态对照；`docs/product-guide.md` 产品说明；README 瘦身为入口；`test_docs_consistency.py` 六条一致性断言；后端 364 passed、前端 51 passed、覆盖率 89.81% |
 | 阶段评估与 P0 修复（030） | 2026-10-23 | `evaluation-report.md` 重写为 029 基线（019→029 六维度对比、G0–G7 门禁、六类缺陷复盘、剩余缺口，综合 7.9/10）；`competing_risk`/`multiplicity_control` 描述改为「已实现/未实现」并加 3 条契约测试；022–029 成果按 4 个自包含提交入库；`.gitignore` 忽略 31MB 教材 PDF；后端 356 passed、前端 51 passed、覆盖率 89.81% |
 | Estimand / SAP 结构化（029） | 2026-10-23 | `EstimandSpec` 五要素（人群/变量/处理/伴发事件+五策略/汇总指标）；`sap_status_of` 宿主判定 `estimand_declared`/`exploratory`；`plan` 事件下发；方案卡折叠展示与缺失项提示；caveat 按状态二选一；前后端文案红线扫描；后端 353 passed、前端 51 passed、覆盖率 89.81% |
 | 缺失数据路径（028） | 2026-10-23 | `missing_report` 升级为缺失模式诊断（univariate/monotonic/arbitrary + 分组差异提示 + 阈值警告 + 机制声明）；新增 `impute`（MICE 20 次取均值 + 插补间方差、median/mean/LOCF 仅敏感性、delta 扫描）；插补数据集经 `dataset_added` 写入工作区且不切换 active；scikit-learn 列为必需依赖；后端 339 passed、前端 48 passed、覆盖率 89.74% |
@@ -76,7 +78,8 @@
 - 估计目标（Estimand）仅展示与状态标注：SAP 摘要导出、事前注册、盲态与样本量论证未实现；五要素文本不做与数据列的语义校验。
 - 多重性目前覆盖 SNK/Tukey/Dunnett/LSD/Schéffé/Holm/Bonferroni；Hochberg、gatekeeping、图形法与期中 α 消耗未实现。
 - WebSocket 断线重连、历史会话回放未实现；会话仅存内存，重启丢失。
-- 无上传大小/行数限额；解析在主事件循环同步执行。
+- 上传已有 50MB 大小限额（超限 413）；行数限额与异步解析（`to_thread`）未实现，解析仍在主事件循环同步执行。
 - 结果解读为单轮生成：不支持重新生成、不支持跨多次交付的多轮答疑记忆；解读文字质量依赖真实模型（CI 仅验证契约与守卫）。
 - Logistic 分离目前「拒绝输出」，未提供 Firth 惩罚回归；共线性仅通过系数/收敛间接暴露。
 - 分支保护（要求 CI 必过才能合并）需在 GitHub 仓库设置中手动开启；CI 不接入真实模型，`real_llm` 保持默认 skip。
+- 架构图为 Mermaid 源码（可渲染、可 diff），未导出 PNG/SVG；贴到 PPT 或对外文档需自行截图。

@@ -48,11 +48,22 @@
 
 ## 时间线
 
+### 2026-10-24
+
+| 日期 | 类型 | 内容 | 原因/依据 |
+|---|---|---|---|
+| 2026-10-24 | 需求 | 统计正确性七处修复：Breslow 方差补乘 w²、RMST 组间统一 tau=各组最大随访最小值、`mcnemar_test` 加入分类列校验豁免、AUC 改平均秩（rankdata）、配对 Wilcoxon bootstrap 改差值重抽样、Fisher 路径补算 Cramér's V（`effect_chi2`）、卡方内嵌表星号在 attach_significance 后读取 | 代码审查实测缺陷：Breslow χ² 被放大致假阳性、tau 不可比则 RMST 差无效、McNemar 对真实分类文本被 INSUFFICIENT_DATA 硬拒、并列预测值 AUC 系统性偏差、独立重抽样破坏配对结构、Fisher 路径效应量恒 0、星号恒 ns；修复后后端 382 passed |
+| 2026-10-24 | 需求 | 安全边界三处收紧：SPA catch-all 加 resolve 前缀校验堵路径穿越、CSV/XLSX 导出对 `= + - @` 前缀文本单元格转义、上传加 50MB 限额（超限 413 并清理临时文件） | 审查实测 `GET /..%2F..%2Fetc%2Fpasswd` 可读项目外文件、`GET /.env` 可泄漏密钥；导出件在 Excel 打开可触发公式执行；上传无限制为 DoS 零门槛 |
+| 2026-10-24 | 规范 | 编排契约升级：`manager.transition` 改为转移表强约束（非法转移抛 `InvalidStateTransition` → `PROTOCOL_UNSUPPORTED` 错误帧）；新增 `SESSION_BUSY` 错误码与同会话忙锁（chat/答疑并发拒绝）；WS 循环三层兜底（非 JSON/非对象/内部异常回错误帧不断连）；统计执行移入 `asyncio.to_thread`（进度回调经 `call_soon_threadsafe` 回主循环）；审阅超时改只对执行完成后计时，超时取消工作流并清理残留执行 | 审查发现：状态机为无条件赋值可 DELIVERED 重跑旧方案、执行同步阻塞全部 WS 会话（实测心跳停滞）、同会话无忙锁任务槽位互踩、非 JSON 帧直接断连；决策记录见 `docs/design-notes.md` §4 |
+| 2026-10-24 | 选型 | `matplotlib>=3.8` 提升至 `>=3.9` | `plotting.py:131` 使用 3.9 引入的 `boxplot(tick_labels=)`，3.8 下箱线图 TypeError；声明与实现不一致 |
+| 2026-10-24 | 需求 | 前端 `plan` 事件透传 `estimand`/`sap_status` 两字段并补 App 层集成测试 | 029 后端已下发但 App 层 emit 丢弃，方案卡恒显「探索性分析」，估计目标面板实际不可见；前端 52 passed |
+
 ### 2026-10-23
 
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
 
+| 2026-10-23 | 需求 | 031 文档体系建成：`architecture.md` 三张 Mermaid 图（分层架构 / 统计策略选择 / 执行流程）+ `product-guide.md` 产品说明，README 瘦身为入口 | 架构与流程此前只存在于代码与口口相传；README 长期停在「12 类方法 / 200 项」 |
 | 2026-10-23 | 需求 | 030 阶段评估与 P0 修复完成：`evaluation-report.md` 重写为 029 基线（含 019→029 六维度对比），修正 `competing_risk`/`multiplicity_control` 滞后描述，022–029 成果一次性入库 | 评估发现「八个 spec 无任何提交」与「planned 描述滞后」两项 P0 风险；报告综合分 7.4 → 7.9 |
 | 2026-10-23 | 需求 | 029 Estimand/SAP 完成：`AnalysisPlan` 增估计目标五要素（人口/变量/处理/伴发事件+策略/汇总指标），`plan` 事件下发 `estimand` 与 `sap_status`，方案卡折叠展示并标「已声明估计目标」或「探索性分析」 | 教材对 Estimand/SAP 0 覆盖，依据 ICH E9(R1)；方案只说「用什么方法」不说「回答什么问题」 |
 | 2026-10-23 | 需求 | 028 缺失数据路径完成：`missing_report` 升级为缺失模式诊断（univariate/monotonic/arbitrary + 分组差异提示 + 阈值警告），新增 `impute`（MICE 20 次取均值 + 插补间方差、median/mean/LOCF 仅敏感性、delta 扫描）并产出可继续分析的插补数据集 | 教材对缺失数据 0 覆盖，依据 Little & Rubin (2019)/van Buuren (2018)；此前只能报缺失率，无法处理 |
@@ -61,6 +72,7 @@
 | 2026-10-23 | 需求 | 024 第六至十章口径完成：新增单样本检验、随机区组方差分析、配对 McNemar；ANOVA 事后改 SNK-q、四格表三档、多样本率 χ² 分割、Kendall τ | 复核教材目录发现第六至十章正文存在，此前只读了第二/三/十一章 |
 | 2026-10-23 | 需求 | 023 教材口径校准完成（第二/三/十一章）：`descriptive_stats`、`reference_range`、相关强度与因果提示、回归方差分析表 | 评估报告 G0/G3 缺口；教材核对发现描述指标缺标准差、参考值范围完全缺失 |
 | 2026-10-23 | 需求 | 022 结果解释与交付后答疑分流完成 | 产品定位要求「交付图表与解释建议」，评估报告 P0-6；旧实现交付只有表/图/策略链 |
+| 2026-10-23 | 结构 | 三张图集中 `docs/architecture.md` 单一来源，`product-guide` 与 `statistics-methods` 只链接不复制；`project-profile` 工作流改为引用图 3 | 同一张图存两处必然漂移，漂移的架构图比没有更误导 |
 | 2026-10-23 | 结构 | 022–029 全部成果按 4 个自包含提交入库（代码+测试 / spec 归档 / 文档 / 协作计划） | 此前仅 2 次提交且停在 spec 021；`registry.py`/`methods.py`/`service.py` 被多 spec 共改，按 spec 拆会让中间提交不可构建 |
 | 2026-10-23 | 结构 | 新增 `EstimandSpec`/`IntercurrentEvent` 契约与 `sap_status_of` 纯函数；`sap_status` 不进模型字段，由 service 计算后写入事件 | 防止模型或前端伪造「确证性」状态，状态只允许一个来源 |
 | 2026-10-23 | 结构 | 新增 `stats/impute.py`；`execute_step` 注入内部保留键 `_artifact_dir` 供 handler 落盘；service 扫描 `imputed_dataset` 并新增 `dataset_added` 事件 | pipeline 的 `execute_step` 不传目录给 handler，需一个受控落盘通道；复用 `data_profile` 会自动切换 active，打断用户当前工作区 |
@@ -70,6 +82,7 @@
 | 2026-10-23 | 结构 | 新增 `stats/inference.py`（单样本/区组/析因/重复测量/McNemar/样本量）与 `stats/notes.py`（教材口径文案单一源） | `stats/methods.py` 已约 900 行，继续膨胀会失控；口径文案集中才可整体评审 |
 | 2026-10-23 | 结构 | 从 1009 例基线数据派生固定夹具 `backend/tests/fixtures/`，新增 `scripts/smoke_baseline.py` 全量冒烟（不入 CI） | 真实规模暴露正态判定缺陷；全链路（画像+描述+ANOVA+卡方）<0.3s |
 | 2026-10-23 | 结构 | 新增 `descriptive_stats`（分布四态判定 + 推荐表达）与 `reference_range`（正态/百分位/对数正态），`describe` 保持七列不变 | 教材 §2/§3 要求按分布形态选指标；独立成工具避免波及画像、导出与既有断言 |
+| 2026-10-23 | 规范 | 新增 `test_docs_consistency.py` 六条断言：附录工具清单与注册表严格相等、README 禁具体计数、无死链、能力矩阵覆盖全工具、三图边数≥10、禁过期表述 | 文档无人守就会失真；把「与代码同源」变成可执行规则 |
 | 2026-10-23 | 规范 | 能力披露契约：每条 planned 必须写明「未实现/不支持」范围，且 name 不得与注册表键重名 | `multiplicity_control` 曾写「Holm/Dunnett 未实现」而 025 已实现；模糊清单不会主动提醒作者回头改 |
 | 2026-10-23 | 规范 | caveat 按 `sap_status` 二选一（已声明/探索性），先剔除两条固定文案再追加；新增前后端文案红线扫描测试 | 两条固定文案并列会互相稀释；「五要素齐全」不等于事前注册，不得用 pre-specified 或确证性描述本系统产出 |
 | 2026-10-23 | 规范 | 新增 `ChartType == CHART_TYPES` 一致性测试 | 本次真实漏改 `ChartType`，导致 `PlanStep` 在 pydantic 阶段被拒（与 023 的 `MethodType` 漏改同类） |

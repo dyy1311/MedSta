@@ -33,6 +33,14 @@
 会话状态：`discussing（讨论态）→ plan_confirmed（方案确认）→ executing（执行中）→ delivered（已交付）→（修正意见）→ discussing`。
 状态由宿主 `SessionManager` 管理（确定性状态机，非模型决策）；模型只参与 discussing 态的内容生成。
 
+**转移表强约束（2026-10-24 审查修复）**：`manager.transition` 此前是无条件赋值——状态机只存在于注释里，
+存在两条实际可触发的非法路径：DELIVERED 态 `confirm_plan` 会用残留的 `session.plan` 直接重跑旧方案；
+PLAN_CONFIRMED 期重复 confirm 会重复下发 `chart_config`。现以 `_ALLOWED_TRANSITIONS`
+（源状态 → 允许目标集合）在 `manager.py` 宿主侧强约束：DISCUSSING→{DISCUSSING, PLAN_CONFIRMED, EXECUTING}、
+PLAN_CONFIRMED→{EXECUTING, DISCUSSING}、EXECUTING→{DELIVERED, DISCUSSING}、
+DELIVERED→{DISCUSSING, DELIVERED}。非法转移抛 `InvalidStateTransition(ValueError)`，
+由 `service.handle` 统一转换为 `PROTOCOL_UNSUPPORTED` 错误帧（协议顺序错误语义，manager 不依赖 errors 模块保持分层）。
+
 ## 5. 流式与持久化策略
 
 - WebSocket 推送讨论消息、pipeline 步骤进度、artifact 就绪事件。

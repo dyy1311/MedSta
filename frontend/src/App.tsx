@@ -149,7 +149,8 @@ export default function App() {
         streamTextRef.current[ownerSid] = "";
         if (thinking) emit({ role: "system", kind: "thinking", content: thinking });
         emit({ role: "system", kind: "plan", type: "plan", message: event.message,
-               steps: event.steps, options: event.options });
+               steps: event.steps, options: event.options,
+               estimand: event.estimand ?? null, sap_status: event.sap_status });
         if (isActive) { setPhaseFor(ownerSid, "idle"); setConfirming(false); }
         break;
       }
