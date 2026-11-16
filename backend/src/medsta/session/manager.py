@@ -8,7 +8,6 @@ import pathlib
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict
 
 import pandas as pd
 
@@ -70,7 +69,7 @@ class SessionManager:
     """管理会话创建、数据挂载与状态流转。内存实现；持久化由 storage/records 负责。"""
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
 
     def create_session(self, session_id: str | None = None) -> Session:
         """创建会话；指定 session_id 供快照恢复使用（状态由恢复方直接赋值）。"""

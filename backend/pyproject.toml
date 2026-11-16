@@ -40,3 +40,18 @@ asyncio_mode = "auto"
 markers = [
     "real_llm: 需要真实模型 API（设置 MEDSTA_REAL_LLM=1 才运行，默认跳过）",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+# UP042 (str,Enum -> StrEnum) 属 unsafe fix：本仓库依赖 str(Enum) 的 f-string
+# 语义（成员名），StrEnum 会改为 value——运行时行为变化，禁用
+ignore = ["UP042"]
+
+[tool.mypy]
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = false

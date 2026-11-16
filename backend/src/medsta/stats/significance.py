@@ -37,7 +37,8 @@ def p_adjust(p_values: list[float], method: str = "holm") -> list[float]:
 
 def attach_significance(result: dict, p_key: str, alpha: float) -> dict:
     """就地给含 p_key 的结果 dict 附加 alpha/significant/stars。"""
-    label = significance_label(result.get(p_key), alpha)
+    raw_p = result.get(p_key)
+    label = significance_label(float(raw_p) if raw_p is not None else 1.0, alpha)
     result["alpha"] = alpha
     result.update(label)
     return result

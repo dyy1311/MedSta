@@ -4,12 +4,10 @@ from __future__ import annotations
 import io
 
 import pandas as pd
-import pytest
 
 from medsta.session.manager import manager
 
-
-CSV = "age,city\n25,Beijing\n31,Shanghai\n42,Beijing\n".encode("utf-8")
+CSV = b"age,city\n25,Beijing\n31,Shanghai\n42,Beijing\n"
 
 _DIRTY_CSV = (
     "\ufeff姓名,年龄,得分\n"
@@ -98,7 +96,7 @@ def test_two_uploads_create_independent_workspaces(client, session_id: str) -> N
         client,
         session_id,
         "second.csv",
-        "blood_pressure,weight\n120,60\n130,65\n".encode("utf-8"),
+        b"blood_pressure,weight\n120,60\n130,65\n",
     ).json()
 
     assert first["dataset_id"] != second["dataset_id"]

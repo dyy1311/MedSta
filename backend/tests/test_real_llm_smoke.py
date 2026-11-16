@@ -12,9 +12,7 @@ import pytest
 
 from medsta.config import ProviderConfig
 from medsta.stats.registry import get_tool
-
 from tests.helpers import collect_until, upload_csv
-
 
 pytestmark = pytest.mark.real_llm
 

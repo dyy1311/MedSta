@@ -36,6 +36,7 @@ def save_template(name: str, body: dict, request: Request) -> dict:
     error = validate_steps(steps)
     if error:
         raise HTTPException(status_code=400, detail=error)
+    assert isinstance(steps, list)
     return _store(request).save(name, steps)
 
 
@@ -81,6 +82,7 @@ def import_template(body: dict, request: Request, overwrite: bool = False) -> di
     error = validate_steps(steps)
     if error:
         raise HTTPException(status_code=400, detail=error)
+    assert isinstance(steps, list)
     store = _store(request)
     if store.load(name) is not None and not overwrite:
         raise HTTPException(

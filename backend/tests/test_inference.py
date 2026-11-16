@@ -4,7 +4,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import stats as sp_stats
 
 from medsta.agents.discussion import PlanStep
 from medsta.stats.inference import one_sample_test

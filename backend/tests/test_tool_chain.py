@@ -6,9 +6,8 @@ import pytest
 from agently.core.storage import LocalRecordStore
 
 from medsta.agents.discussion import AnalysisPlan
-from medsta.session.manager import SessionStatus, manager
+from medsta.session.manager import manager
 from medsta.session.service import SessionService
-
 from tests.helpers import (
     PLAN_TABLE_ONLY,
     collect_until,

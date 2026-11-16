@@ -1,8 +1,6 @@
 """034 工作链模板：保存/列表/删除/安全校验。"""
 from __future__ import annotations
 
-import json
-
 from fastapi.testclient import TestClient
 
 from medsta.app import create_app

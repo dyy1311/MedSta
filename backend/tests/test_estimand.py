@@ -17,7 +17,6 @@ from medsta.agents.discussion import (
     sap_status_of,
 )
 from medsta.data.profiler import profile_dataframe
-
 from tests.conftest import RecordingFakeRequest
 
 STEP = {

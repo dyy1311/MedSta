@@ -6,8 +6,9 @@ PlanStep 只携带模型的选择，宿主在此校验后才执行——缺参�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
@@ -77,7 +78,10 @@ _REGISTRY: dict[str, ToolSpec] = {
         name="describe",
         title="描述性统计",
         category=_CATEGORY_DESCRIBE,
-        description="输出数值列的 n/均值/中位数/四分位/极值，可按分组列分层描述（标准差、CV 与几何均数见 descriptive_stats）",
+        description=(
+            "输出数值列的 n/均值/中位数/四分位/极值，可按分组列分层描述"
+            "（标准差、CV 与几何均数见 descriptive_stats）"
+        ),
         params=(
             ToolParam("group_by", "column", "分组描述所用列（可选）", required=False),
         ),

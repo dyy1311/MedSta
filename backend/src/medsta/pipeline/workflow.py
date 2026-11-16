@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from agently import TriggerFlow
 from agently.core.storage import LocalRecordStore
-from pathlib import Path
 
 from medsta.agents.discussion import AnalysisPlan
 from medsta.pipeline.executor import ExecutionReport, PipelineExecutor
@@ -39,7 +39,7 @@ class AnalysisWorkflow:
     # ---- 图定义 ----
 
     def _build_flow(self) -> TriggerFlow:
-        flow = TriggerFlow(name="medsta-analysis")
+        flow: Any = TriggerFlow(name="medsta-analysis")
 
         async def execute(data) -> dict:
             payload = data.resume if data.is_resume else data.input

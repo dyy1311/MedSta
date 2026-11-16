@@ -9,7 +9,6 @@ import pandas as pd
 from medsta.agents.discussion import AnalysisPlan, PlanStep
 from medsta.pipeline.executor import PipelineExecutor
 
-
 DF = pd.DataFrame(
     {
         "group": ["A", "A", "A", "B", "B", "B"],

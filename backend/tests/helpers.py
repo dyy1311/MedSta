@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import io
-from typing import Iterable
+from collections.abc import Iterable
 
 from medsta.agents.discussion import DiscussionAgent
-
 from tests.conftest import RecordingFakeRequest
-
 
 CSV = b"group,value,age\nA,1.5,20\nA,2.5,21\nA,3.5,22\nB,4.5,41\nB,5.5,42\nB,6.5,43\n"
 
@@ -90,7 +88,10 @@ def drive_to_review(ws, *, types: dict[str, str] | None = None) -> tuple[list[di
     got, _ = collect_until(ws, {"type_review"})
     frames.extend(got)
 
-    ws.send_json({"type": "type_confirm", "types": types or {"group": "categorical", "value": "continuous", "age": "continuous"}})
+    ws.send_json(
+        {"type": "type_confirm",
+         "types": types or {"group": "categorical", "value": "continuous", "age": "continuous"}}
+    )
     got, _ = collect_until(ws, {"plan"})
     frames.extend(got)
 
@@ -98,7 +99,9 @@ def drive_to_review(ws, *, types: dict[str, str] | None = None) -> tuple[list[di
     got, config = collect_until(ws, {"chart_config", "review_request"})
     frames.extend(got)
     if config.get("type") == "chart_config":
-        ws.send_json({"type": "chart_choice", "use_default": True, "layout": "separate", "alpha": 0.05, "correction": "holm"})
+        ws.send_json(
+            {"type": "chart_choice", "use_default": True, "layout": "separate", "alpha": 0.05, "correction": "holm"}
+        )
         got, review = collect_until(ws, {"review_request"})
         frames.extend(got)
     else:

@@ -11,7 +11,6 @@ from medsta.agents.discussion import PlanStep
 from medsta.stats import plotting
 from medsta.stats.registry import CHART_TYPES, get_tool
 
-
 CHART_CASES = [
     ("histogram", "describe", ["value"], {}),
     ("boxplot", "group_compare", ["value"], {"group_column": "group"}),

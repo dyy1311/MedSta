@@ -3,18 +3,20 @@ import io
 import pathlib
 
 import pandas as pd
-
+import pytest
+from agently.core.storage import LocalRecordStore
 from fastapi.testclient import TestClient
 
+from medsta.agents.discussion import DiscussionAgent
 from medsta.app import create_app
-
+from medsta.session.service import SessionService
 
 CSV_CONTENT = (
-    "age,city\n"
-    "25,Beijing\n"
-    "31,Shanghai\n"
-    "42,Beijing\n"
-).encode("utf-8")
+    b"age,city\n"
+    b"25,Beijing\n"
+    b"31,Shanghai\n"
+    b"42,Beijing\n"
+)
 
 
 def _client_with_session() -> tuple:
@@ -123,18 +125,6 @@ def test_batch_column_types_rejects_invalid_type() -> None:
 
     assert resp.status_code == 400
 
-
-# ---- SessionService 编排测试（模拟模型） ----
-
-import pytest
-
-from agently.core.storage import LocalRecordStore
-
-from medsta.agents.discussion import DiscussionAgent
-from medsta.data.parser import load_table
-from medsta.data.profiler import profile_dataframe
-from medsta.pipeline.workflow import AnalysisWorkflow
-from medsta.session.service import SessionService
 
 
 class RecordingFakeRequest:

@@ -50,7 +50,7 @@ async def test_service_chat_uses_active_dataset(service, tmp_path) -> None:
     """B2: chat 使用激活工作区的画像与数据"""
     sent, send = _collector()
     sid = service.create_session()
-    id1 = service.attach_dataframe(sid, df=pd.DataFrame({"age": [1.0]}), dataset_path="a.csv")
+    service.attach_dataframe(sid, df=pd.DataFrame({"age": [1.0]}), dataset_path="a.csv")
     id2 = service.attach_dataframe(sid, df=pd.DataFrame({"age": [1.0, 2.0, 3.0, 4.0]}), dataset_path="b.csv")
     await service.handle(sid, {"type": "workspace", "dataset_id": id2}, send)
     await service.handle(sid, {"type": "chat", "content": "分析年龄"}, send)

@@ -57,7 +57,7 @@ class EventLog:
     def _append_with_rotation(self, path: pathlib.Path, frame: dict) -> None:
         """追加一帧；超过 EVENT_LOG_MAX_LINES 时重写为尾部一半（seq 内存计数器不受影响）。"""
         if path.is_file() and path.stat().st_size > 0:
-            with open(path, "r", encoding="utf-8") as existing:
+            with open(path, encoding="utf-8") as existing:
                 lines = existing.readlines()
             lines.append(json.dumps(frame, ensure_ascii=False, default=str) + "\n")
             if len(lines) > EVENT_LOG_MAX_LINES:

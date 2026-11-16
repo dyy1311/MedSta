@@ -8,9 +8,10 @@ Owner 划分（见 docs/design-notes.md）：
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import agently
 from agently.types.settings import OpenAICompatibleSettings
@@ -33,7 +34,7 @@ class ProviderConfig:
     timeout: float = 120.0
 
     @classmethod
-    def from_env(cls) -> "ProviderConfig":
+    def from_env(cls) -> ProviderConfig:
         # 未手动 export 时自动加载项目根 .env；不覆盖已显式设置的变量
         load_dotenv(_PROJECT_ROOT / ".env", override=False)
         base_url = os.environ.get("LLM_BASE_URL", "")
@@ -75,7 +76,7 @@ class InterpretConfig:
         object.__setattr__(self, "max_sentences", clamped)
 
     @classmethod
-    def from_env(cls) -> "InterpretConfig":
+    def from_env(cls) -> InterpretConfig:
         raw = os.environ.get("MEDSTA_INTERPRET", "1").strip().lower()
         enabled = raw not in {"0", "false", "off", "no"}
         try:

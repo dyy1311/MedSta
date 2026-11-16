@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from medsta.session.manager import manager
-
 from tests.helpers import collect_until, drive_to_review, fake_agent, upload_csv
 
 CSV_WITH_MISSING = (

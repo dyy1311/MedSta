@@ -1,5 +1,4 @@
 """008 一键启动器：参数解析 / 命令构造 / 前置检查 纯函数测试。"""
-import pytest
 
 from medsta.launcher import (
     build_dev_commands,

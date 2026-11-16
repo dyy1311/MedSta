@@ -276,15 +276,17 @@ def survival_analysis(df: pd.DataFrame, step: Any, params: dict) -> dict[str, An
 
     rmst_summary: dict[str, Any] = {}
     if group_column:
-        grouped = list(frame.groupby(frame[group_column].astype(str), sort=False))
+        grouped_rmst: list[tuple[Any, pd.DataFrame]] = []
+        for key, chunk in frame.groupby(frame[group_column].astype(str), sort=False):
+            grouped_rmst.append((key, chunk))
         # 未显式指定 tau 时以「各组最大随访最小值」统一截断，保证组间 RMST 可比
         common_tau = (
             float(tau)
             if tau
-            else min(float(chunk[time_column].max()) for _, chunk in grouped)
+            else min(float(chunk[time_column].max()) for _, chunk in grouped_rmst)
         )
         per_group = {}
-        for label, chunk in grouped:
+        for label, chunk in grouped_rmst:
             per_group[str(label)] = rmst(
                 chunk[time_column].to_numpy(dtype=float),
                 chunk[event_column].to_numpy(dtype=int),
@@ -409,7 +411,7 @@ def cox_fit(time: Any, event: Any, covariates: pd.DataFrame) -> dict[str, Any]:
 
     score_statistic = getattr(model, "score", None)
     if score_statistic is None or callable(score_statistic):
-        score_test = {
+        score_test: dict[str, Any] = {
             "chi2": None,
             "p_value": None,
             "note": "statsmodels 未提供 Score 统计量，已输出 LR 与 Wald 检验",

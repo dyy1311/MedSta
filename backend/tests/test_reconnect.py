@@ -6,7 +6,6 @@ import json
 from fastapi.testclient import TestClient
 
 from medsta.app import create_app
-
 from tests.helpers import PLAN_TABLE_ONLY, fake_agent, upload_csv
 
 
@@ -21,7 +20,9 @@ def _drive_to_plan(ws) -> None:
                 return seen
             seen.append(frame)
         raise AssertionError(f"未等到 {types}")
-    ws.send_json({"type": "type_confirm", "types": {"group": "categorical", "value": "continuous", "age": "continuous"}})
+    ws.send_json(
+        {"type": "type_confirm", "types": {"group": "categorical", "value": "continuous", "age": "continuous"}}
+    )
     until({"plan"})
 
 
@@ -40,7 +41,6 @@ def _frames_from_events(root, session_id: str) -> list[dict]:
 
 def test_events_have_monotonic_seq_and_persist(tmp_path) -> None:
     """B1: 出站帧带单调递增 seq，并追加落盘 events.jsonl。"""
-    import io
 
     root = tmp_path / "sessions"
     app = create_app(data_root=root)
@@ -99,7 +99,6 @@ def test_resume_replays_gap_only(tmp_path) -> None:
 
 def test_replay_after_backend_restart(tmp_path) -> None:
     """B3: 后端重启后 resume 可回放历史帧，且新事件 seq 续接不回退。"""
-    import io
 
     root = tmp_path / "sessions"
     app = create_app(data_root=root)
@@ -172,7 +171,6 @@ def test_resume_without_last_seq_unchanged(tmp_path) -> None:
 
 def test_user_action_recorded(tmp_path) -> None:
     """B1(036): 用户 chat/confirm 落盘为 *_user 帧（占 seq），出站帧 seq 续接。"""
-    import io
 
     root = tmp_path / "sessions"
     app = create_app(data_root=root)
@@ -207,7 +205,6 @@ def test_replay_includes_user_frames_idempotent(tmp_path) -> None:
     with client.websocket_connect(f"/ws/{session_id}") as ws:
         _drive_to_plan(ws)
 
-    before_count = len(_frames_from_events(root, session_id))
     with client.websocket_connect(f"/ws/{session_id}") as ws:
         ws.send_json({"type": "resume", "last_seq": 0})
         got_user = False

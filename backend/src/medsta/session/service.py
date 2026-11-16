@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import pathlib
 import uuid
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import pandas as pd
 
@@ -24,6 +26,8 @@ from medsta.session.persistence import SNAPSHOT_VERSION, SessionStore
 from medsta.stats.registry import HARD_ISSUE_CODES, ToolIssue, get_tool, validate_plan
 
 SendFn = Callable[[dict], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
 
 # 用户驱动的动作：记入事件流（036 消息流完整回放），帧类型为 "<event>_user"
 USER_ACTION_EVENTS = {
@@ -295,7 +299,7 @@ class SessionService:
                 ).to_event()
             )
             return
-        event_type = event.get("type")
+        event_type = str(event.get("type") or "")
         if event_type in USER_ACTION_EVENTS:
             # 036：用户动作入事件流（占 seq、不实时广播）——刷新/重启后可重建用户气泡
             compact = {
@@ -410,6 +414,7 @@ class SessionService:
             plan = None
             for attempt in range(2):
                 try:
+                    assert self._agent is not None
                     plan = await self._agent.draft_plan_stream(
                         profile=session.data.profile,
                         user_request=content,
@@ -611,9 +616,9 @@ class SessionService:
             plan_steps.append(
                 PlanStep(
                     title=str(raw.get("title") or method or f"步骤 {index + 1}"),
-                    method=method,
+                    method=cast(Any, method),  # get_tool 已校验在册
                     target_columns=[str(c) for c in (raw.get("target_columns") or [])],
-                    chart_type=str(raw.get("chart_type") or "none"),
+                    chart_type=str(raw.get("chart_type") or "none"),  # type: ignore[arg-type]
                     params=dict(raw.get("params") or {}),
                     rationale="用户装配",
                 )
@@ -653,9 +658,9 @@ class SessionService:
             self._busy.discard(session_id)
 
     async def _execute_plan(self, session_id: str, send: SendFn) -> None:
-        print(f"[flow] _execute_plan enter {session_id[:8]}", flush=True)
+        logger.debug("flow _execute_plan enter %s", session_id[:8])
         session = manager.get(session_id)
-        assert session is not None
+        assert session is not None and session.data is not None, "执行前置条件缺失"
         if not isinstance(session.plan, AnalysisPlan):
             return
         manager.transition(session_id, SessionStatus.EXECUTING)
@@ -693,7 +698,7 @@ class SessionService:
             self._reports[session_id] = report
             self._report_history.setdefault(session_id, {})[report_id] = report
             self._persist(session_id)
-            print(f"[flow] review ready {session_id[:8]}", flush=True)
+            logger.debug("flow review ready %s", session_id[:8])
             await send({"type": "review_request", "report": report})
             await self._register_imputed_datasets(session_id, report, send)
             self._start_interpretation(session_id, report, session, send)
@@ -706,10 +711,13 @@ class SessionService:
                         suggestions.append(
                             {"step_index": index, "title": plan_step.title, "charts": options}
                         )
-            print(f"[flow] tables:", [bool(report["steps"][i].get("table")) for i in range(len(report["steps"]))],
-                  "| artifacts:", [report["steps"][i].get("artifact") for i in range(len(report["steps"]))],
-                  "| charts:", [getattr(st, "chart_type", None) for st in session.plan.steps],
-                  "| suggests:", suggestions, flush=True)
+            logger.debug(
+                "flow tables=%s artifacts=%s charts=%s suggests=%s",
+                [bool(s.get("table")) for s in report["steps"]],
+                [s.get("artifact") for s in report["steps"]],
+                [getattr(st, "chart_type", None) for st in session.plan.steps],
+                suggestions,
+            )
             if suggestions:
                 await send({"type": "plot_suggest", "steps": suggestions})
         except ToolValidationError as exc:
@@ -763,7 +771,7 @@ class SessionService:
                 continue
             path = pathlib.Path(str(payload["path"]))
             if not path.exists():
-                print(f"[impute] missing csv {path}", flush=True)
+                logger.warning("impute missing csv %s", path)
                 continue
             frame = pd.read_csv(path)
             name = str(payload.get("name") or f"插补数据集 {index + 1}")
@@ -822,20 +830,20 @@ class SessionService:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # 增强项失败不得影响交付
-            print(f"[interpret] failed {session_id[:8]} {type(exc).__name__}", flush=True)
+            logger.warning("interpret failed %s %s", session_id[:8], type(exc).__name__)
             return
         if result is None:
-            print(f"[interpret] skipped {session_id[:8]}", flush=True)
+            logger.debug("interpret skipped %s", session_id[:8])
             return
         current = self._reports.get(session_id)
         if current is None or _step_signature(current) != signature:
-            print(f"[interpret] stale dropped {session_id[:8]}", flush=True)
+            logger.debug("interpret stale dropped %s", session_id[:8])
             return
         try:
             await send({"type": "interpretation", **result.model_dump()})
             await self._record(session_id, "interpretation", result.model_dump())
         except Exception as exc:
-            print(f"[interpret] send failed {session_id[:8]} {type(exc).__name__}", flush=True)
+            logger.warning("interpret send failed %s %s", session_id[:8], type(exc).__name__)
 
     def _cancel_interpretation(self, session_id: str) -> None:
         task = self._interpret_tasks.pop(session_id, None)
@@ -895,7 +903,7 @@ class SessionService:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(f"[answer] failed {session_id[:8]} {type(exc).__name__}", flush=True)
+            logger.warning("answer failed %s %s", session_id[:8], type(exc).__name__)
             reply = None
         if reply is None:
             await send(
@@ -1035,7 +1043,7 @@ class SessionService:
         await send(
             {
                 "type": "type_confirmed",
-                "dataset_id": session.active_dataset_id,
+                "dataset_id": session.active_dataset_id,  # type: ignore[union-attr]
                 "profile": data.profile.model_dump(),
             }
         )

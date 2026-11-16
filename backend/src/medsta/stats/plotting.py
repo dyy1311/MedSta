@@ -47,9 +47,8 @@ def _stars(p_value: float | None) -> str:
     return "***" if p_value < 0.001 else "**" if p_value < 0.01 else "*" if p_value < 0.05 else "ns"
 
 
-def _annotate_pairwise(ax, positions: list[float], pairs: list[dict], alpha: float) -> None:
+def _annotate_pairwise(ax, positions: list[str], pairs: list[dict], alpha: float) -> None:
     """在组间绘制比较线并标注星号/ns（最多 3 对，按校正后 p 升序）。"""
-    import itertools
 
     ymax = ax.get_ylim()[1]
     span = ax.get_ylim()[1] - ax.get_ylim()[0]
@@ -176,16 +175,16 @@ def render_chart(
         ax.set_ylabel(columns[0])
     elif chart == "survival_curve":
         payload = result or {}
-        series: list[tuple[str, list]] = []
+        curves: list[tuple[str, list]] = []
         if isinstance(payload.get("groups"), dict):
-            series = [
+            curves = [
                 (str(label), group.get("points") or [])
                 for label, group in payload["groups"].items()
             ]
         elif payload.get("points"):
-            series = [("overall", payload["points"])]
+            curves = [("overall", payload["points"])]
         palette = ["#3B5BDB", "#E8590C", "#2F9E44", "#9775FA", "#F08C00", "#22B8CF"]
-        for offset, (label, points) in enumerate(series):
+        for offset, (label, points) in enumerate(curves):
             if not points:
                 continue
             color = palette[offset % len(palette)]
@@ -209,7 +208,7 @@ def render_chart(
         ax.set_xlabel(str(payload.get("time_column") or "time"))
         ax.set_ylabel("survival")
         ax.set_ylim(0, 1.05)
-        if len(series) > 1:
+        if len(curves) > 1:
             ax.legend()
     elif chart == "bar":
         group_col = params.get("group_column")

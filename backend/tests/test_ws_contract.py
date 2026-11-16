@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, PlanOption, PlanStep
 from medsta.session.manager import manager
-
 from tests.helpers import (
     PLAN_WITH_CHART,
     collect_until,

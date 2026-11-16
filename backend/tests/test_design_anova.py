@@ -5,7 +5,6 @@ statsmodels（anova_lm / AnovaRM）作为基准。
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 

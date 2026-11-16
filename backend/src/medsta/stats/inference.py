@@ -413,7 +413,7 @@ def sample_size(df: Any, step: Any, params: dict) -> dict:
     if design in ("one_mean", "paired_means"):
         solver = TTestPower()
         if solve == "power":
-            n_per_group = int(math.ceil(float(given_n)))
+            n_per_group = int(math.ceil(float(given_n or 0)))
             power = float(
                 solver.power(effect_size=effect_size, nobs=n_per_group, alpha=alpha)
             )
@@ -432,7 +432,7 @@ def sample_size(df: Any, step: Any, params: dict) -> dict:
     elif design == "two_means":
         solver_ind = TTestIndPower()
         if solve == "power":
-            n_per_group = int(math.ceil(float(given_n)))
+            n_per_group = int(math.ceil(float(given_n or 0)))
             power = float(
                 solver_ind.power(
                     effect_size=effect_size, nobs1=n_per_group, alpha=alpha, ratio=ratio
@@ -455,7 +455,7 @@ def sample_size(df: Any, step: Any, params: dict) -> dict:
     elif design == "two_proportions":
         solver_norm = NormalIndPower()
         if solve == "power":
-            n_per_group = int(math.ceil(float(given_n)))
+            n_per_group = int(math.ceil(float(given_n or 0)))
             power = float(
                 solver_norm.power(
                     effect_size=effect_size, nobs1=n_per_group, alpha=alpha, ratio=ratio
@@ -478,7 +478,7 @@ def sample_size(df: Any, step: Any, params: dict) -> dict:
     elif design == "anova":
         solver_anova = FTestAnovaPower()
         if solve == "power":
-            n_per_group = int(math.ceil(float(given_n)))
+            n_per_group = int(math.ceil(float(given_n or 0)))
             power = float(
                 solver_anova.power(
                     effect_size=effect_size,
@@ -510,7 +510,7 @@ def sample_size(df: Any, step: Any, params: dict) -> dict:
     else:  # correlation
         solver_corr = NormalIndPower()
         if solve == "power":
-            n_per_group = int(math.ceil(float(given_n)))
+            n_per_group = int(math.ceil(float(given_n or 0)))
             power = float(
                 solver_corr.power(effect_size=effect_size, nobs1=n_per_group, alpha=alpha)
             )
@@ -790,7 +790,7 @@ def one_sample_test(df: pd.DataFrame, step: Any, params: dict) -> dict:
     alternative = _ALTERNATIVES[sides]
     if final_method == "t":
         statistic, p_value = sp_stats.ttest_1samp(values, mu0, alternative=alternative)
-        df_value: float | None = float(n - 1)
+        df_value = float(n - 1)
         ci95 = _mean_ci(mean, se, df_value, alpha, sides)
         ci_method = "t"
     else:

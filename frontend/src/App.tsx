@@ -14,6 +14,7 @@ import type { ChatSessionEntry } from "./chat/SessionTabs";
 import WorkspacePanel from "./workspace/WorkspacePanel";
 import ChainBuilder from "./builder/ChainBuilder";
 import type { ChainStep } from "./builder/ChainBuilder";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function upsertReport(reports: ExecutionReport[], report: ExecutionReport, replaceLast: boolean) {
   const next = [...reports];
@@ -757,5 +758,14 @@ export default function App() {
 
       <CapabilityDrawer open={capabilitiesOpen} onClose={() => setCapabilitiesOpen(false)} />
     </div>
+  );
+}
+
+/** 入口包装：渲染异常时显示可恢复错误卡而非白屏（039） */
+export function AppWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }

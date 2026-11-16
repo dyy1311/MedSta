@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from medsta.app import create_app
 from medsta.session.manager import manager
-
 from tests.helpers import (
     PLAN_TABLE_ONLY,
     collect_until,

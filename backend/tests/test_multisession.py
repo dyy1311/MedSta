@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import io
 
-from agently.core.storage import LocalRecordStore
 import pandas as pd
+from agently.core.storage import LocalRecordStore
 
 from medsta.agents.discussion import AnalysisPlan, DiscussionAgent
 from medsta.session.manager import manager
 from medsta.session.service import SessionService
-
 from tests.conftest import RecordingFakeRequest
-
 
 PLAN = {
     "message": "先看分布",
@@ -39,7 +37,7 @@ def _service(tmp_path) -> tuple[SessionService, LocalRecordStore]:
     return service, store
 
 
-def _collector() -> tuple[list[dict], "object"]:
+def _collector() -> tuple[list[dict], object]:
     sent: list[dict] = []
 
     async def _send(message: dict) -> None:

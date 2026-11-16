@@ -1,8 +1,6 @@
 """038 可选单令牌鉴权：env 开关，未配置时行为与现状完全一致。"""
 from __future__ import annotations
 
-import io
-
 from fastapi.testclient import TestClient
 
 from medsta.app import create_app

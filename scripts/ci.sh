@@ -19,6 +19,12 @@ python --version
 node --version
 npm --version
 
+step "Backend lint (ruff)"
+(cd backend && python -m ruff check src tests)
+
+step "Backend type check (mypy)"
+(cd backend && python -m mypy src/medsta)
+
 step "Backend tests"
 if [[ "${CI_SKIP_COVERAGE:-0}" == "1" ]]; then
   (cd backend && python -m pytest)

@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import copy
-import json
 import io
+import json
 from urllib.parse import unquote
 
 import pandas as pd
 
 from medsta.session.manager import manager
-
 from tests.helpers import (
     PLAN_NO_TABLE,
     PLAN_TABLE_ONLY,

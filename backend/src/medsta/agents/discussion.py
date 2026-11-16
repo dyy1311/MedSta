@@ -6,7 +6,8 @@ Owner 划分：模型做语义决策（选方法/定步骤/写说明）；宿主
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -159,7 +160,8 @@ _OUTPUT_FIELDS = {
     ),
     "options": (
         list,
-        "行动选项数组，每项含 id(str, 唯一)/label(str)/action(confirm|revise|explain|custom|supplement)/description(str)",
+        "行动选项数组，每项含 id(str, 唯一)/label(str)/"
+        "action(confirm|revise|explain|custom|supplement)/description(str)",
     ),
     "estimand": (
         object,
@@ -247,6 +249,7 @@ class DiscussionAgent:
             instruct=instruct,
             on_delta=on_delta,
         )
+        plan = cast(AnalysisPlan, plan)
         self._validate_plan(plan, profile)
         _assign_step_ids(plan)
         plan.options = _normalize_options(plan.options)
@@ -256,9 +259,10 @@ class DiscussionAgent:
         if self._request_factory is not None:
             fake = self._request_factory()
             return lambda *, input, info, instruct: self._run(fake, input, info, instruct)
-        assert self._gateway is not None, "需要 gateway 或 request_factory 之一"
+        gateway = self._gateway
+        assert gateway is not None, "需要 gateway 或 request_factory 之一"
         return lambda *, input, info, instruct: self._run_gateway(
-            self._gateway, input, info, instruct
+            gateway, input, info, instruct
         )
 
     @staticmethod
@@ -278,8 +282,11 @@ class DiscussionAgent:
         gateway: ModelGateway, input: str, info: str, instruct: str
     ) -> AnalysisPlan:
         fields = _OUTPUT_FIELDS
-        return gateway.request_structured(
-            AnalysisPlan, fields=fields, input=input, info=info, instruct=instruct
+        return cast(
+            AnalysisPlan,
+            gateway.request_structured(
+                AnalysisPlan, fields=fields, input=input, info=info, instruct=instruct
+            ),
         )
 
     @staticmethod

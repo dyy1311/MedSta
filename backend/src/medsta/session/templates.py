@@ -10,10 +10,10 @@ import os
 import pathlib
 import re
 
+from medsta.stats.registry import get_tool
+
 SNAPSHOT_VERSION = 1
 _NAME_PATTERN = re.compile(r"^[\w\-\u4e00-\u9fa5]{1,64}$", re.UNICODE)
-
-from medsta.stats.registry import get_tool
 
 
 def is_safe_name(name: str) -> bool:
@@ -21,7 +21,7 @@ def is_safe_name(name: str) -> bool:
     return bool(_NAME_PATTERN.match(name))
 
 
-def validate_steps(steps: list) -> str | None:
+def validate_steps(steps: list | None) -> str | None:
     """校验模板步骤：非空且每个 method 已注册；返回错误信息或 None。"""
     if not isinstance(steps, list) or not steps:
         return "工作链为空，至少需要一个步骤"

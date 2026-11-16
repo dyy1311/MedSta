@@ -6,8 +6,7 @@ import pytest
 from agently.core.storage import LocalRecordStore
 
 from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, PlanOption, PlanStep
-from medsta.session.manager import SessionStatus, manager
-from medsta.session.manager import InvalidStateTransition
+from medsta.session.manager import InvalidStateTransition, SessionStatus, manager
 from medsta.session.service import SessionService
 
 

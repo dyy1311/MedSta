@@ -80,6 +80,7 @@ async def run_dev(*, port: int, frontend_port: int) -> int:
             start_new_session=True,
         )
         procs.append((name, proc))
+        assert proc.stdout is not None
         pumps.append(asyncio.create_task(_pump(proc.stdout, name)))
         print(f"[launcher] {name} 已启动 (pid={proc.pid})")
 
@@ -109,7 +110,7 @@ async def run_dev(*, port: int, frontend_port: int) -> int:
     for _, proc in procs:
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _signal_group(proc, signal.SIGKILL)
             await proc.wait()
     # 清理：先摘除信号 handler，避免 loop 关闭期间回调触发 RuntimeError

@@ -284,4 +284,9 @@ def test_reference_range_tool_reports_table() -> None:
     assert result["column"] == "crp"
     assert result["method"] in ("normal", "log_normal", "percentile")
     assert result["table"]["rows"][0]["sides"] == "one_upper"
-    assert result["method_note"] == "§3 表3-1：正态法双侧 x̄±1.96s、单侧 x̄±1.64s（95%）；百分位数法双侧 P2.5~P97.5。单双侧须由专业知识确定；百分位数法要求样本量较大，n 偏小时两端界值不稳定。"
+    assert (
+        result["method_note"]
+        == "§3 表3-1：正态法双侧 x̄±1.96s、单侧 x̄±1.64s（95%）；"
+        "百分位数法双侧 P2.5~P97.5。单双侧须由专业知识确定；"
+        "百分位数法要求样本量较大，n 偏小时两端界值不稳定。"
+    )

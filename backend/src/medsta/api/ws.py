@@ -8,12 +8,15 @@ service 穿透异常都不再整条断开，客户端始终能收到可分类的
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from medsta.errors import AppError, ErrorCode
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 @router.websocket("/ws/{session_id}")
@@ -34,7 +37,7 @@ async def session_ws(websocket: WebSocket, session_id: str) -> None:
         async with send_lock:
             frame = event_log.commit(session_id, message)
             await websocket.send_json(frame)
-            print(f"[ws] sent {frame.get('type')} (seq={frame.get('seq')})", flush=True)
+            logger.info("ws sent %s (seq=%s)", frame.get("type"), frame.get("seq"))
 
     try:
         while True:
@@ -60,7 +63,7 @@ async def session_ws(websocket: WebSocket, session_id: str) -> None:
                     ).to_event()
                 )
                 continue
-            print(f"[ws] recv {session_id[:8]} {event.get('type')}", flush=True)
+            logger.debug("ws recv %s %s", session_id[:8], event.get("type"))
 
             # 035 断线重连：客户端带 last_seq 时先补发缺口帧（原帧原 seq，绕过包装）
             last_seq = event.get("last_seq")

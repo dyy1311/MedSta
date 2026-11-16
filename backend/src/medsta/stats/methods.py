@@ -782,9 +782,9 @@ def anova(df: pd.DataFrame, step: Any, params: dict) -> dict:
         parametric = {"snk", "tukey", "dunnett", "lsd", "scheffe"}
         if test == "anova" and correction in parametric:
             all_values = np.concatenate(samples)
-            grand = float(all_values.mean())
-            ss_total_value = float(((all_values - grand) ** 2).sum())
-            ss_between = sum(len(values) * (values.mean() - grand) ** 2 for values in samples)
+            grand_value = float(all_values.mean())
+            ss_total_value = float(((all_values - grand_value) ** 2).sum())
+            ss_between = sum(len(values) * (values.mean() - grand_value) ** 2 for values in samples)
             df_within = len(all_values) - len(groups)
             ms_within = (ss_total_value - ss_between) / df_within
 
