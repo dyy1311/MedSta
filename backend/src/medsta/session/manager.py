@@ -72,8 +72,9 @@ class SessionManager:
     def __init__(self) -> None:
         self._sessions: Dict[str, Session] = {}
 
-    def create_session(self) -> Session:
-        session = Session(session_id=uuid.uuid4().hex)
+    def create_session(self, session_id: str | None = None) -> Session:
+        """创建会话；指定 session_id 供快照恢复使用（状态由恢复方直接赋值）。"""
+        session = Session(session_id=session_id or uuid.uuid4().hex)
         self._sessions[session.session_id] = session
         return session
 

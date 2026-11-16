@@ -70,6 +70,7 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     root = pathlib.Path(data_root or os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
     app.state.data_root = root
     app.state.service = _build_service(root)
+    app.state.service.restore_all()  # 032：从快照恢复历史会话
 
     root.mkdir(parents=True, exist_ok=True)
     app.mount("/data", StaticFiles(directory=str(root)), name="data")

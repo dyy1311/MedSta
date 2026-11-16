@@ -71,6 +71,8 @@ async def upload_data(session_id: str, file: UploadFile, request: Request) -> di
         name=file.filename or dataset_id,
         dataset_id=dataset_id,
     )
+    # REST 上传绕过 service 编排：显式落盘会话快照（032）
+    request.app.state.service.persist(session_id)
     return {
         "type": "data_profile",
         "dataset_id": dataset_id,
@@ -81,7 +83,7 @@ async def upload_data(session_id: str, file: UploadFile, request: Request) -> di
 
 
 @router.patch("/sessions/{session_id}/workspace/{dataset_id}/columns")
-async def patch_columns(session_id: str, dataset_id: str, body: dict) -> dict:
+async def patch_columns(session_id: str, dataset_id: str, body: dict, request: Request) -> dict:
     """用户修正列类型（视为敲定），返回更新后的画像。"""
     session = manager.get(session_id)
     data = session.datasets.get(dataset_id) if session else None
@@ -96,6 +98,7 @@ async def patch_columns(session_id: str, dataset_id: str, body: dict) -> dict:
     apply_column_type(data.df, data.profile, column, new_type)
     data.type_confirmed = True
     data.profile.type_confirmed = True
+    request.app.state.service.persist(session_id)
     return {"type": "data_profile", "dataset_id": dataset_id, "profile": data.profile.model_dump()}
 
 

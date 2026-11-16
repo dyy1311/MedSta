@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import uuid
 from typing import Any, Awaitable, Callable
 
 import pandas as pd
@@ -14,10 +15,12 @@ import pandas as pd
 from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, sap_status_of
 from medsta.agents.interpretation import InterpretationAgent
 from medsta.config import InterpretConfig
+from medsta.data.parser import load_table
 from medsta.data.profiler import VALID_COLUMN_TYPES, apply_column_type, profile_dataframe
 from medsta.errors import AppError, ErrorCode, ToolValidationError
 from medsta.pipeline.workflow import AnalysisWorkflow
 from medsta.session.manager import InvalidStateTransition, SessionStatus, manager
+from medsta.session.persistence import SNAPSHOT_VERSION, SessionStore
 
 SendFn = Callable[[dict], Awaitable[None]]
 
@@ -39,6 +42,7 @@ class SessionService:
         workflow_factory: Callable[[], AnalysisWorkflow] | None = None,
         interpret_agent: InterpretationAgent | None = None,
         interpret_config: InterpretConfig | None = None,
+        store: SessionStore | None = None,
     ) -> None:
         self._agent = agent
         if record_store is None:
@@ -50,6 +54,7 @@ class SessionService:
             )
         self._record_store = record_store
         self._data_root = pathlib.Path(data_root)
+        self._store = store if store is not None else SessionStore(data_root)
         self._workflow_factory = workflow_factory or (
             lambda: AnalysisWorkflow(record_store=self._record_store)
         )
@@ -58,6 +63,7 @@ class SessionService:
         self._revision_notes: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._reports: dict[str, dict] = {}
+        self._report_history: dict[str, dict[str, dict]] = {}  # session -> report_id -> report
         self._pending_chats: dict[str, str] = {}
         self._plans: dict[str, AnalysisPlan] = {}
         self._requests: dict[str, str] = {}
@@ -98,11 +104,126 @@ class SessionService:
             name=name or dataset_id,
             dataset_id=dataset_id,
         )
+        self._persist(session_id)
         return dataset_id
+
+    # ---- 会话持久化（032）----
+
+    def _build_snapshot(self, session_id: str, session: Any) -> dict:
+        """组装会话快照：只含重建所需最小状态，不含 DataFrame 数据。"""
+        import datetime
+
+        datasets = []
+        for ds_id, data in session.datasets.items():
+            datasets.append(
+                {
+                    "id": ds_id,
+                    "name": data.name,
+                    "path": data.dataset_path,
+                    "type_confirmed": data.type_confirmed,
+                    "column_types": {
+                        name: col.type
+                        for name, col in data.profile.columns.items()
+                        if col.type
+                    },
+                }
+            )
+        return {
+            "version": SNAPSHOT_VERSION,
+            "session_id": session_id,
+            "status": session.status.value,
+            "active_dataset_id": session.active_dataset_id,
+            "datasets": datasets,
+            "plan": (
+                session.plan.model_dump() if isinstance(session.plan, AnalysisPlan) else None
+            ),
+            "report": self._reports.get(session_id),
+            "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def _persist(self, session_id: str) -> None:
+        """关键节点落盘会话快照；失败降级内存模式（不阻塞主流程）。"""
+        if self._store is None:
+            return
+        session = manager.get(session_id)
+        if session is None:
+            return
+        self._store.save(session_id, self._build_snapshot(session_id, session))
+
+    def persist(self, session_id: str) -> None:
+        """公共落盘入口：供绕过 service 的 REST 路由（上传/列类型）调用。"""
+        self._persist(session_id)
+
+    def restore_all(self) -> int:
+        """启动时从快照恢复会话；返回恢复数。
+
+        `executing` 是未完成的执行，恢复一律降级为 `discussing`（B8）；
+        单个会话恢复失败不拖垮启动。
+        """
+        if self._store is None:
+            return 0
+        restored = 0
+        for snapshot in self._store.load_all():
+            session_id = str(snapshot["session_id"])
+            if manager.get(session_id) is not None:
+                continue
+            try:
+                status_value = str(snapshot.get("status", "discussing"))
+                if status_value == SessionStatus.EXECUTING.value:
+                    status_value = SessionStatus.DISCUSSING.value
+                session = manager.create_session(session_id=session_id)
+                session.status = SessionStatus(status_value)  # 恢复不走转移表
+                for entry in snapshot.get("datasets") or []:
+                    df = load_table(str(entry["path"]))
+                    profile = profile_dataframe(df)
+                    dataset_id = manager.attach_data(
+                        session_id,
+                        df=df,
+                        dataset_path=str(entry["path"]),
+                        profile=profile,
+                        artifact_dir=self._data_root
+                        / session_id
+                        / str(entry["id"])
+                        / "artifacts",
+                        name=str(entry.get("name") or entry["id"]),
+                        dataset_id=str(entry["id"]),
+                    )
+                    data = session.datasets[dataset_id]
+                    for column, new_type in (entry.get("column_types") or {}).items():
+                        if str(new_type) not in VALID_COLUMN_TYPES:
+                            continue
+                        try:
+                            apply_column_type(data.df, data.profile, str(column), str(new_type))
+                        except (KeyError, ValueError):
+                            continue
+                    data.type_confirmed = bool(entry.get("type_confirmed"))
+                    data.profile.type_confirmed = data.type_confirmed
+                active = snapshot.get("active_dataset_id")
+                session.active_dataset_id = (
+                    str(active) if active in session.datasets else next(iter(session.datasets), None)
+                )
+                plan_payload = snapshot.get("plan")
+                if plan_payload:
+                    session.plan = AnalysisPlan.model_validate(plan_payload)
+                    self._plans[session_id] = session.plan
+                report = snapshot.get("report")
+                if report:
+                    self._reports[session_id] = report
+                    report_id = str(report.get("report_id") or uuid.uuid4().hex[:8])
+                    report["report_id"] = report_id
+                    self._report_history.setdefault(session_id, {})[report_id] = report
+                restored += 1
+            except Exception:
+                continue
+        return restored
 
     @property
     def reports(self) -> dict[str, dict]:
         return self._reports
+
+    @property
+    def report_history(self) -> dict[str, dict[str, dict]]:
+        return self._report_history
 
     def set_column_type(
         self, session_id: str, dataset_id: str, column: str, new_type: str
@@ -116,6 +237,7 @@ class SessionService:
             raise ValueError(f"非法列类型: {new_type}")
         apply_column_type(data.df, data.profile, column, new_type)
         data.type_confirmed = True
+        self._persist(session_id)
         return data.profile.model_dump()
 
     def get_status(self, session_id: str) -> str:
@@ -272,6 +394,7 @@ class SessionService:
             session.plan = plan
             self._requests[session_id] = content
             manager.transition(session_id, SessionStatus.DISCUSSING)
+            self._persist(session_id)
             await send(
                 {
                     "type": "plan",
@@ -428,7 +551,11 @@ class SessionService:
             self._plans[session_id] = session.plan
             payload = await workflow.wait_for_review(execution)
             report = payload.get("report", {})
+            report_id = uuid.uuid4().hex[:8]
+            report["report_id"] = report_id
             self._reports[session_id] = report
+            self._report_history.setdefault(session_id, {})[report_id] = report
+            self._persist(session_id)
             print(f"[flow] review ready {session_id[:8]}", flush=True)
             await send({"type": "review_request", "report": report})
             await self._register_imputed_datasets(session_id, report, send)
@@ -696,9 +823,12 @@ class SessionService:
             await workflow.review(execution, {"decision": "accept"})
             report = execution.result.get_state("report")
             manager.transition(session_id, SessionStatus.DELIVERED)
+            # 落盘先于送达：客户端看到 delivered 时交付态已持久化，
+            # 也避免 accept 后立即断连把 persist 连同 await 链一起取消
+            self._executions.pop(session_id, None)
+            self._persist(session_id)
             await send({"type": "delivered", "report": report})
             await self._record(session_id, "delivery", {"report": report})
-            self._executions.pop(session_id, None)
         elif decision == "revise":
             note = str(event.get("content", "")).strip()
             if note:
@@ -730,6 +860,7 @@ class SessionService:
             )
             return
         data = manager.activate(session_id, dataset_id)
+        self._persist(session_id)
         await send(
             {
                 "type": "data_profile",
@@ -763,6 +894,7 @@ class SessionService:
             return
         data.type_confirmed = True
         data.profile.type_confirmed = True
+        self._persist(session_id)
         await send(
             {
                 "type": "type_confirmed",
@@ -813,6 +945,7 @@ class SessionService:
         report["steps"][index]["artifact"] = path.name
         report["steps"][index]["result"]["artifact"] = path.name
         self._reports[session_id] = report
+        self._persist(session_id)
         await send({"type": "review_request", "report": report, "updated": True})
 
     async def _on_option(self, session_id: str, event: dict, send: SendFn) -> None:
@@ -883,6 +1016,16 @@ class SessionService:
         execution = self._executions.get(session_id)
         report = self._reports.get(session_id)
         if execution is not None and report is not None:
+            await send({"type": "resumed", "stage": "review"})
+            await send({"type": "review_request", "report": report})
+            return
+        if report is not None and session.status == SessionStatus.DELIVERED:
+            # 跨重启还原交付态（032）：report 已从快照恢复
+            await send({"type": "resumed", "stage": "delivered"})
+            await send({"type": "delivered", "report": report})
+            return
+        if report is not None:
+            # 报告已恢复但未交付（执行后重启）：还原审阅等待
             await send({"type": "resumed", "stage": "review"})
             await send({"type": "review_request", "report": report})
             return
