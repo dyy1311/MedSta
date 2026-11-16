@@ -53,6 +53,8 @@
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
 | 2026-11-16 | 需求 | 033 原子统计工作链完成（产品定位调整：模型不灌管线）：WS `run_chain` 手动装配执行通道（宿主 `validate_plan` 硬校验、跳过出图确认暂停、零模型参与可执行）；前端「工具装配」Tab（按分类选工具、按 ToolSpec 动态参数表单、目标列/图表选择、工作链上移/下移/删除、模型方案一键导入）；交付态可装配新链，执行中被 SESSION_BUSY 拒绝 | 用户主权要求：每个统计分析指令工具化，模型只提建议，用户自行装配确认后执行；registry 22 个 ToolSpec 即原子单位 |
+| 2026-11-16 | 环境 | 安装三个前端技能到 `~/.codebuddy/skills/`：`frontend-dev`（高级 UI+动效）、`awesome-design-md`（54 个品牌设计系统模板）、`frontend-design-guidelines`（SkillHub 下载量 11.3K 的反 AI 模板化设计指导） | 用户要求联网检索并安装高分前端/美化技能 |
+| 2026-11-16 | 需求 | 前端视觉升级（美学方向：精密仪器/Refined，参考 Linear 层次纪律）：自托管 Space Grotesk（display/数字排印）+ 全局 `tabular-nums` 数字等宽；头部深度渐变（双色光晕+底边微光）；页面「坐标纸」底纹；阴影四级体系（xs/sm/card/hover/pop）；细滚动条、品牌选区色、统一 focus-visible 环；执行进度不定态 shimmer；统计表表头分层+行 hover、卡片 hover 提升 | skill 指导：commit to a palette、memorable element、避免 AI 默认扁平观感；统计工具核心可读性=数字等宽对齐；截图验证通过 |
 | 2026-11-16 | 规范 | JSON 输出硬门：`tests/test_json_contract.py` 逐工具采样（22 工具全覆盖），`execute_step` 出口必须通过 `json.dumps(allow_nan=False)`；新增工具不同时登记采样无法合入（覆盖性测试守护） | 用户硬要求「所有分析数据输出为 json」；NaN/Inf/numpy 类型均为硬失败 |
 | 2026-11-16 | 需求 | 导出与登记：表格导出新增 `format=json`（meta/table/result 完整输出）；图导出新增 JPG/PDF/TIF（按需重渲染，与 PNG 并存）；`docs/tools.md` 登记全部统计工具与作图类型并由 `test_tools_md_matches_registry` 双向守护；前端表格行加 JSON 下载、图卡加 JPG/PDF/TIF 下载 | 用户要求：前端只呈现表格/图，下载提供 JSON/CSV/XLSX/PDF/TIF/JPG；工具登记文档化 |
 | 2026-11-16 | 需求 | 032 会话持久化完成：`session/persistence.py` SessionStore（JSON+原子写），上传/类型确认/方案落定/报告产出/交付/切工作区 6 个落盘点，`create_app` 启动恢复（DataFrame 从数据文件重建+列类型重放），`resume` 还原审阅/交付态；`executing` 快照恢复降级 `discussing` | TO_DO P1-1 前半；此前会话只存内存重启即丢，是内部日常使用最痛的基础设施缺口；快照不含 DataFrame 数据（体积可控），为 033 断线重连/回放提供数据源 |

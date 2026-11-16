@@ -453,14 +453,18 @@ export default function App() {
       : "";
 
   return (
-    <div className="flex h-full flex-col bg-surface-page">
-      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 bg-primary-dark px-5 shadow-card">
+    <div className="flex h-full flex-col bg-surface-page bg-grid-page">
+      <header className="bg-header-depth fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-white/8 px-5 shadow-card">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-cyan/20">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-cyan/20 ring-1 ring-primary-cyan/30">
             <BarChart3 className="h-5 w-5 text-primary-cyan" />
           </div>
-          <span className="text-base font-semibold text-white">MedSta</span>
-          <span className="text-xs text-white/60">AI 数据分析工作台</span>
+          <span className="font-display text-base font-bold tracking-tightest text-white">
+            MedSta
+          </span>
+          <span className="border-l border-white/15 pl-2 text-xs text-white/55">
+            AI 数据分析工作台
+          </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <button

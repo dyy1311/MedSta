@@ -202,20 +202,22 @@ export default function ChatPanel({
             <div className="mb-1.5 flex items-center justify-between text-xs text-ink-muted">
               <span>{progress ? `执行中：${progress.title}` : "正在执行方案…"}</span>
               {progress && (
-                <span className="font-mono">
+                <span className="num text-primary-dark">
                   {progress.step}/{progress.total}
                 </span>
               )}
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-ink/8">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-primary to-primary-cyan transition-all duration-500"
-                style={{
-                  width: progress
-                    ? `${Math.round(((progress.step - 1) / Math.max(progress.total, 1)) * 100)}%`
-                    : "12%",
-                }}
-              />
+              {progress ? (
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary-cyan transition-all duration-500"
+                  style={{
+                    width: `${Math.round(((progress.step - 1) / Math.max(progress.total, 1)) * 100)}%`,
+                  }}
+                />
+              ) : (
+                <div className="shimmer-bar h-full w-full rounded-full" />
+              )}
             </div>
           </div>
         )}

@@ -44,8 +44,11 @@ export default function WorkspacePanel({
         reportId: report.report_id,
       }))
       .filter(
-        (item): item is { filename: string; stepIndex: number; reportId?: string } =>
-          Boolean(item.filename)
+        (item): item is {
+          filename: string;
+          stepIndex: number;
+          reportId: string | undefined;
+        } => typeof item.filename === "string"
       )
   );
 
@@ -134,7 +137,7 @@ export default function WorkspacePanel({
                   {tableSteps.map(({ step, report, reportIndex }) => (
                     <div
                       key={`${step.title}-${reportIndex}`}
-                      className="rounded-2xl bg-surface-card p-3 shadow-card"
+                      className="animate-fade-in-up rounded-2xl bg-surface-card p-3 shadow-card transition-shadow duration-300 hover:shadow-hover"
                     >
                       <div className="mb-1.5 flex items-center gap-2">
                         <span className="text-sm font-medium text-ink">{step.title}</span>
@@ -160,7 +163,7 @@ export default function WorkspacePanel({
                       <div className="overflow-x-auto rounded-lg border border-ink/8">
                         <table className="w-full text-left text-xs">
                           <thead>
-                            <tr className="bg-surface-page text-ink-muted">
+                            <tr className="border-b border-ink/8 bg-surface-raised text-ink-muted">
                               {step.table!.columns.map((col) => (
                                 <th key={col} className="whitespace-nowrap px-2.5 py-1.5 font-medium">
                                   {col}
@@ -172,7 +175,9 @@ export default function WorkspacePanel({
                             {step.table!.rows.map((row, rowIndex) => (
                               <tr
                                 key={rowIndex}
-                                className={rowIndex % 2 ? "bg-surface-page/60" : ""}
+                                className={`transition-colors hover:bg-primary-soft/50 ${
+                                  rowIndex % 2 ? "bg-surface-page/60" : ""
+                                }`}
                               >
                                 {step.table!.columns.map((col) => (
                                   <td

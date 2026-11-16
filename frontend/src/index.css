@@ -2,12 +2,104 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body,
-#root {
-  height: 100%;
+@layer base {
+  @font-face {
+    font-family: "Space Grotesk";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-400-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Space Grotesk";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-500-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Space Grotesk";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-700-normal.woff2") format("woff2");
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-page text-ink antialiased;
+    /* 统计工具的排印基础：数字等宽对齐 */
+    font-variant-numeric: tabular-nums;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-primary-dark;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary/50 ring-offset-1 ring-offset-surface-page;
+  }
+
+  /* 细滚动条：不干扰数据密度 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(107, 114, 128, 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(107, 114, 128, 0.3);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(107, 114, 128, 0.5);
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
-body {
-  @apply bg-surface-page text-ink antialiased;
+@layer utilities {
+  /* 页面底纹：极淡冷色网格，给数据工作台以「坐标纸」质感 */
+  .bg-grid-page {
+    background-image:
+      linear-gradient(rgba(59, 91, 219, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59, 91, 219, 0.035) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* 深色头部的质感叠加 */
+  .bg-header-depth {
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% -10%, rgba(59, 91, 219, 0.5), transparent),
+      radial-gradient(ellipse 60% 50% at 90% 120%, rgba(34, 184, 207, 0.28), transparent),
+      linear-gradient(135deg, #1e2a5a 0%, #16204a 55%, #131c3d 100%);
+  }
+
+  /* 进度/加载 shimmer */
+  .shimmer-bar {
+    background: linear-gradient(
+      90deg,
+      rgba(59, 91, 219, 0.15) 25%,
+      rgba(59, 91, 219, 0.55) 50%,
+      rgba(59, 91, 219, 0.15) 75%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* 数字读数：display 字体 + 等宽数字 */
+  .num {
+    font-family: theme("fontFamily.display");
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
 }
