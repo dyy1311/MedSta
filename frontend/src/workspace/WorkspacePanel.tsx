@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { BarChart3, CloudUpload, FileSpreadsheet, Inbox, Plus } from "lucide-react";
 import type { ExecutionReport, WorkspaceTab } from "../types";
 import ProfileTable from "./ProfileTable";
@@ -32,6 +32,8 @@ export default function WorkspacePanel({
   onSetColumnTypes,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [reportStyle, setReportStyle] = useState("academic");
+  const [reportFormat, setReportFormat] = useState("docx");
   const active = workspaces.find((workspace) => workspace.datasetId === activeId) ?? workspaces[0];
   const reports = active?.reports ?? [];
   const tableSteps = reports.flatMap((report) =>
@@ -252,6 +254,35 @@ export default function WorkspacePanel({
                   <span className="text-sm font-semibold text-primary-dark">
                     执行产出（{charts.length}）
                   </span>
+                  {reports.length > 0 && (
+                    <span className="ml-auto flex items-center gap-1.5 text-xs">
+                      <select
+                        aria-label="报告风格"
+                        value={reportStyle}
+                        onChange={(event) => setReportStyle(event.target.value)}
+                        className="cursor-pointer rounded-lg border border-ink/15 bg-white px-1.5 py-0.5 text-[11px]"
+                      >
+                        <option value="academic">学术风</option>
+                        <option value="lite">轻量</option>
+                      </select>
+                      <select
+                        aria-label="报告格式"
+                        value={reportFormat}
+                        onChange={(event) => setReportFormat(event.target.value)}
+                        className="cursor-pointer rounded-lg border border-ink/15 bg-white px-1.5 py-0.5 text-[11px]"
+                      >
+                        <option value="docx">Word</option>
+                        <option value="pdf">PDF</option>
+                        <option value="md">Markdown</option>
+                      </select>
+                      <a
+                        href={`/report/${sessionId}?style=${reportStyle}&format=${reportFormat}`}
+                        className="cursor-pointer rounded-lg border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/5"
+                      >
+                        导出报告
+                      </a>
+                    </span>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   {charts.map(({ filename, stepIndex, reportId }, index) => (

@@ -221,4 +221,22 @@ describe("ChartCard", () => {
       "/export/s1/0?format=xlsx&report_id=abc12345"
     );
   });
+
+  it("导出报告：风格与格式选择正确拼入下载链接（040）", () => {
+    render(<WorkspacePanel {...baseProps} workspaces={[workspace({ reports: [REPORT] })]} />);
+
+    // 默认：学术风 docx
+    expect(screen.getByRole("link", { name: "导出报告" })).toHaveAttribute(
+      "href",
+      "/report/s1?style=academic&format=docx"
+    );
+
+    // 用户自主切换风格与格式
+    fireEvent.change(screen.getByLabelText("报告风格"), { target: { value: "lite" } });
+    fireEvent.change(screen.getByLabelText("报告格式"), { target: { value: "pdf" } });
+    expect(screen.getByRole("link", { name: "导出报告" })).toHaveAttribute(
+      "href",
+      "/report/s1?style=lite&format=pdf"
+    );
+  });
 });
