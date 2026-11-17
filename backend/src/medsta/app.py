@@ -35,6 +35,7 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
 
     from medsta.agents.discussion import DiscussionAgent
     from medsta.agents.interpretation import InterpretationAgent
+    from medsta.agents.type_advisor import ColumnTypeAdvisor
     from medsta.config import InterpretConfig, build_gateway
 
     root = data_root or pathlib.Path(os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
@@ -44,15 +45,18 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
         gateway = build_gateway()
         agent: DiscussionAgent | None = DiscussionAgent(gateway=gateway)
         interpret_agent: InterpretationAgent | None = InterpretationAgent(gateway=gateway)
+        advisor: ColumnTypeAdvisor | None = ColumnTypeAdvisor(gateway=gateway)
     except RuntimeError:
         agent = None
         interpret_agent = None
+        advisor = None
     return SessionService(
         record_store=record_store,
         data_root=root,
         agent=agent,
         interpret_agent=interpret_agent,
         interpret_config=interpret_config,
+        type_advisor=advisor,
     )
 
 

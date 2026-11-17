@@ -97,6 +97,10 @@ export default function App() {
   const [typeReview, setTypeReview] = useState<TypeReviewRequest | null>(null);
   const [plotSuggest, setPlotSuggest] = useState<PlotSuggestStep[] | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // 041 AI 确认类型：模型建议列表（用户采纳后经宿主校验落库）
+  const [columnSuggestions, setColumnSuggestions] = useState<
+    { name: string; suggested_type: string; confidence: number; reason: string }[] | null
+  >(null);
   const setConfirmingFor = (sid: string, value: boolean) => setConfirming(value);
   // 切会话/新会话时清空上一会话的交互卡（修复：旧会话的绘图确认/补图/类型审阅残留）
   useEffect(() => {
@@ -104,6 +108,7 @@ export default function App() {
     setPlotSuggest(null);
     setTypeReview(null);
     setConfirming(false);
+    setColumnSuggestions(null);
   }, [activeChatIdResolved]);
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false);
   const [connStatus, setConnStatus] = useState<"connected" | "reconnecting">("connected");
@@ -337,6 +342,9 @@ export default function App() {
             alpha: event.alpha, correction: event.correction, message: event.message,
           });
         }
+        break;
+      case "column_type_suggestions":
+        setColumnSuggestions((event as unknown as { suggestions: typeof columnSuggestions }).suggestions ?? []);
         break;
       case "error":
         if (isActive) {
@@ -646,6 +654,8 @@ export default function App() {
       onUpload={(file) => void handleUpload(file)}
       onSetColumnType={handleSetColumnType}
       onSetColumnTypes={handleSetColumnTypes}
+      onSuggestTypes={() => sendWs({ type: "suggest_column_types" })}
+      columnSuggestions={columnSuggestions ?? undefined}
     />
   );
 

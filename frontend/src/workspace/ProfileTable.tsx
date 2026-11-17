@@ -19,22 +19,36 @@ const TYPE_COLORS: Record<string, string> = {
   text: "bg-ink/8 text-ink-muted",
 };
 
+interface ColumnSuggestion {
+  name: string;
+  suggested_type: string;
+  confidence: number;
+  reason: string;
+}
+
 interface Props {
   profile: TableProfile;
   onSetColumnType?: (column: string, type: string) => void;
   /** 批量列类型修改：一次回调 {列名: 类型} */
   onSetColumnTypes?: (types: Record<string, string>) => void;
+  /** 触发模型列类型建议（041 AI 确认） */
+  onSuggestTypes?: () => void;
+  /** 模型建议（041）；用户采纳后经宿主校验落库 */
+  suggestions?: ColumnSuggestion[];
 }
 
 export default function ProfileTable({
   profile,
   onSetColumnType,
   onSetColumnTypes,
+  onSuggestTypes,
+  suggestions = [],
 }: Props) {
   const columns = Object.values(profile.columns);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchType, setBatchType] = useState("continuous");
   const editable = Boolean(onSetColumnType || onSetColumnTypes);
+  const suggestionByColumn = new Map(suggestions.map((item) => [item.name, item]));
 
   const allSelected = columns.length > 0 && selected.size === columns.length;
   const toggleAll = () => {
@@ -65,6 +79,39 @@ export default function ProfileTable({
           {profile.row_count} 行 × {profile.column_count} 列
         </span>
       </div>
+
+      {editable && suggestions.length > 0 && (
+        <div
+          data-testid="suggestions-bar"
+          className="animate-fade-in-up mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-primary-cyan/30 bg-primary-cyan/5 px-3 py-2"
+        >
+          <span className="text-xs font-medium text-primary-dark">AI 类型建议</span>
+          <span className="text-[11px] text-ink-muted">（模型建议仅供参考，采纳后生效）</span>
+          <button
+            type="button"
+            onClick={() => {
+              if (!onSetColumnTypes) return;
+              const types: Record<string, string> = {};
+              for (const item of suggestions) types[item.name] = item.suggested_type;
+              onSetColumnTypes(types);
+            }}
+            className="ml-auto cursor-pointer rounded-lg bg-primary px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-primary-hover"
+          >
+            全部采纳建议
+          </button>
+        </div>
+      )}
+      {editable && onSuggestTypes && (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={onSuggestTypes}
+            className="cursor-pointer rounded-lg border border-primary-cyan/50 px-2.5 py-1 text-[11px] font-medium text-primary-cyan transition-colors hover:bg-primary-cyan/10"
+          >
+            AI 确认类型
+          </button>
+        </div>
+      )}
 
       {editable && (
         <div
@@ -151,6 +198,31 @@ export default function ProfileTable({
                 )}
                 <td className="py-2 pr-3 font-medium text-ink">{col.name}</td>
                 <td className="py-2 pr-3">
+                  {suggestionByColumn.has(col.name) && (
+                    <div className="mb-1 flex items-center gap-1">
+                      <span className="rounded bg-primary-cyan/10 px-1 py-0.5 text-[10px] text-primary-cyan">
+                        {`建议: ${COLUMN_TYPE_LABELS[suggestionByColumn.get(col.name)!.suggested_type] ?? suggestionByColumn.get(col.name)!.suggested_type}（${Math.round(suggestionByColumn.get(col.name)!.confidence * 100)}%）`}
+                      </span>
+                      {onSetColumnType && (
+                        <button
+                          type="button"
+                          title={`采纳建议：${col.name}`}
+                          onClick={() =>
+                            onSetColumnType(
+                              col.name,
+                              suggestionByColumn.get(col.name)!.suggested_type
+                            )
+                          }
+                          className="cursor-pointer text-[10px] font-medium text-primary hover:underline"
+                        >
+                          采纳
+                        </button>
+                      )}
+                      <span className="text-[10px] text-ink-faint">
+                        {suggestionByColumn.get(col.name)!.reason}
+                      </span>
+                    </div>
+                  )}
                   {onSetColumnType ? (
                     <select
                       value={

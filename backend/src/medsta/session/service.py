@@ -59,6 +59,7 @@ class SessionService:
         data_root: str | pathlib.Path = "data/sessions",
         workflow_factory: Callable[[], AnalysisWorkflow] | None = None,
         interpret_agent: InterpretationAgent | None = None,
+        type_advisor: Any | None = None,
         interpret_config: InterpretConfig | None = None,
         store: SessionStore | None = None,
     ) -> None:
@@ -90,6 +91,8 @@ class SessionService:
         self._requests: dict[str, str] = {}
         self._busy: set[str] = set()  # 同会话任务忙标记：防 chat/答疑并发竞态
         self._interpret_agent = interpret_agent
+        # 模型辅助列类型确认（041）：可注入替身；生产由 app 按 LLM 配置构建
+        self._type_advisor = type_advisor
         self._interpret_config = interpret_config or InterpretConfig.from_env()
         self._interpret_tasks: dict[str, asyncio.Task] = {}
 
@@ -323,6 +326,7 @@ class SessionService:
             "type_confirm": self._on_type_confirm,
             "plot_later": self._on_plot_later,
             "run_chain": self._on_run_chain,
+            "suggest_column_types": self._on_suggest_column_types,
         }.get(event_type)
         if handler is None:
             await send(
@@ -557,6 +561,77 @@ class SessionService:
                 await workflow.cancel(execution, reason=reason)
             except Exception:
                 pass
+
+    @property
+    def type_advisor(self):
+        """模型辅助列类型确认器（041）；测试可注入替身。"""
+        return self._type_advisor
+
+    @type_advisor.setter
+    def type_advisor(self, value) -> None:
+        self._type_advisor = value
+
+    async def _on_suggest_column_types(self, session_id: str, event: dict, send: SendFn) -> None:
+        """模型辅助列类型确认：宿主组装证据白名单 → 模型语义建议 → 用户采纳敲定。"""
+        session = manager.get(session_id)
+        if session is None or session.data is None:
+            await send(
+                AppError(ErrorCode.DATA_REQUIRED, "尚未上传数据", hint="先上传 CSV/Excel").to_event()
+            )
+            return
+        advisor = self._type_advisor
+        if advisor is None:
+            await send(
+                AppError(
+                    ErrorCode.MODEL_UNAVAILABLE,
+                    "模型不可用，无法提供类型建议",
+                    hint="在 .env 配置 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL 后重试",
+                ).to_event()
+            )
+            return
+        # 证据白名单：不传全量数据，仅最小必要特征
+        evidence: list[dict] = []
+        for name, column in session.data.profile.columns.items():
+            series = session.data.df[name]
+            samples = [str(value) for value in series.dropna().unique()[:5]]
+            stats = {
+                key: value
+                for key, value in (column.stats or {}).items()
+                if isinstance(value, (int, float, str))
+            }
+            evidence.append(
+                {
+                    "name": name,
+                    "inferred_type": column.type,
+                    "missing": column.missing,
+                    "distinct": len(series.dropna().unique()),
+                    "sample_values": samples,
+                    "stats": stats,
+                }
+            )
+        try:
+            report = advisor.advise(evidence)
+        except Exception as exc:
+            await send(
+                AppError(
+                    ErrorCode.MODEL_REQUEST_FAILED,
+                    f"类型建议生成失败：{type(exc).__name__}",
+                    hint="请稍后重试；若持续出现请查看后端日志",
+                ).to_event()
+            )
+            return
+        valid = [s for s in report.columns if str(s.suggested_type) in VALID_COLUMN_TYPES]
+        skipped = [str(s.name) for s in report.columns if str(s.suggested_type) not in VALID_COLUMN_TYPES]
+        await send(
+            {
+                "type": "column_type_suggestions",
+                "suggestions": [s.model_dump() for s in valid],
+                "skipped": skipped,
+            }
+        )
+        await self._record(
+            session_id, "column_type_suggestions", {"suggestions": [s.model_dump() for s in valid]}
+        )
 
     async def _on_run_chain(self, session_id: str, event: dict, send: SendFn) -> None:
         """用户装配的原子工具链：宿主校验后构造手动计划执行，全程无模型参与。

@@ -19,6 +19,9 @@ interface Props {
   onUpload: (file: File) => void;
   onSetColumnType: (column: string, type: string) => void;
   onSetColumnTypes?: (datasetId: string, types: Record<string, string>) => void;
+  /** 041 AI 确认类型：触发建议请求 / 当前建议列表 */
+  onSuggestTypes?: () => void;
+  columnSuggestions?: { name: string; suggested_type: string; confidence: number; reason: string }[];
 }
 
 export default function WorkspacePanel({
@@ -30,6 +33,8 @@ export default function WorkspacePanel({
   onUpload,
   onSetColumnType,
   onSetColumnTypes,
+  onSuggestTypes,
+  columnSuggestions,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [reportStyle, setReportStyle] = useState("academic");
@@ -143,6 +148,8 @@ export default function WorkspacePanel({
                     ? (types) => onSetColumnTypes(active.datasetId, types)
                     : undefined
                 }
+                onSuggestTypes={onSuggestTypes}
+                suggestions={columnSuggestions}
               />
             )}
             {tableSteps.length > 0 && (

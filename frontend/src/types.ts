@@ -165,6 +165,13 @@ export type Phase =
   | "interrupted"
   | "delivered";
 
+export interface ColumnTypeSuggestion {
+  name: string;
+  suggested_type: string;
+  confidence: number;
+  reason: string;
+}
+
 export type WsEvent =
   | {
       type: "data_profile";
@@ -172,6 +179,12 @@ export type WsEvent =
       name?: string;
       type_confirmed?: boolean;
       profile: TableProfile;
+    }
+  | {
+      /** 041 模型辅助列类型确认：建议列表（用户采纳后生效） */
+      type: "column_type_suggestions";
+      suggestions: ColumnTypeSuggestion[];
+      skipped?: string[];
     }
   | PlanEvent
   | { type: "review_request"; report: ExecutionReport; updated?: boolean }
