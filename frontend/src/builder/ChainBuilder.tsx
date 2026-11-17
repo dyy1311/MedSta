@@ -390,7 +390,25 @@ export default function ChainBuilder({
                       {param.name}
                       {param.required ? "（必填）" : ""}
                     </label>
-                    {param.type === "choice" ? (
+                    {/* column 类型一律下拉选择上传表格的列，避免手填出错（041 修复） */}
+                    {param.type === "column" ? (
+                      <select
+                        id={`param-${param.name}`}
+                        aria-label={`${param.name}${param.required ? "（必填）" : ""}`}
+                        className="flex-1 rounded-lg border border-ink/10 bg-white px-2 py-1 text-xs"
+                        value={String(draft[param.name] ?? "")}
+                        onChange={(e) =>
+                          setDraft((prev) => ({ ...prev, [param.name]: e.target.value }))
+                        }
+                      >
+                        <option value="">选择列…</option>
+                        {columns.map((column) => (
+                          <option key={column} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
+                    ) : param.type === "choice" ? (
                       <select
                         id={`param-${param.name}`}
                         aria-label={`${param.name}${param.required ? "（必填）" : ""}`}

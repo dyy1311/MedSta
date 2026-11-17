@@ -224,12 +224,39 @@ def render_chart(
             ax.set_ylabel(columns[0])
     elif chart == "grouped_bar":
         group_col = params.get("group_column") or params.get("group_by")
-        if not group_col:
-            raise ValueError("grouped_bar 需要 group_column 参数")
-        pivoted = df.groupby(group_col, sort=False)[columns].apply(
-            lambda g: g.apply(pd.to_numeric, errors="coerce").mean()
-        )
-        pivoted.plot(kind="bar", ax=ax, color=["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44"])
+        contingency_methods = {"chi_square", "mcnemar_test"}
+        if step.method in contingency_methods:
+            # 列联表计数柱状图（修复：此前误用数值均值路径，分类数据画成空/错图）
+            rows = ((result or {}).get("table") or {}).get("rows") or []
+            if not rows:
+                raise ValueError("列联表计数图需要检验结果中的列联表")
+            category_key = next(iter(rows[0]))
+            categories = [str(row[category_key]) for row in rows]
+            series_names = [key for key in rows[0] if key != category_key]
+            positions = np.arange(len(categories))
+            width = 0.8 / max(1, len(series_names))
+            palette = ["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44", "#9775FA"]
+            for offset, name in enumerate(series_names):
+                values = [float(row.get(name, 0) or 0) for row in rows]
+                ax.bar(
+                    positions + offset * width - 0.4 + width / 2,
+                    values,
+                    width,
+                    label=str(name),
+                    color=palette[offset % len(palette)],
+                )
+            ax.set_xticks(positions)
+            ax.set_xticklabels(categories)
+            ax.set_ylabel("频数")
+            ax.legend(title=category_key)
+        else:
+            # 数值列：分组均值柱状图
+            if not group_col:
+                raise ValueError("grouped_bar 需要 group_column 参数")
+            pivoted = df.groupby(group_col, sort=False)[columns].apply(
+                lambda g: g.apply(pd.to_numeric, errors="coerce").mean()
+            )
+            pivoted.plot(kind="bar", ax=ax, color=["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44"])
     elif chart == "heatmap":
         matrix = df[columns].apply(pd.to_numeric, errors="coerce").corr()
         image = ax.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)

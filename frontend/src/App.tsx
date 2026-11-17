@@ -97,8 +97,18 @@ export default function App() {
   const [typeReview, setTypeReview] = useState<TypeReviewRequest | null>(null);
   const [plotSuggest, setPlotSuggest] = useState<PlotSuggestStep[] | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const setConfirmingFor = (sid: string, value: boolean) => setConfirming(value);
+  // 切会话/新会话时清空上一会话的交互卡（修复：旧会话的绘图确认/补图/类型审阅残留）
+  useEffect(() => {
+    setChartConfig(null);
+    setPlotSuggest(null);
+    setTypeReview(null);
+    setConfirming(false);
+  }, [activeChatIdResolved]);
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(false);
   const [connStatus, setConnStatus] = useState<"connected" | "reconnecting">("connected");
+  // 桌面聚焦模式：点击顶部 Tab 将该栏最大化（再次点击同 Tab 恢复三栏并排）
+  const [focusedPane, setFocusedPane] = useState<null | "chat" | "workspace" | "builder">(null);
   const lastSeqRef = useRef<Record<string, number>>({});
   const [activeTab, setActiveTab] = useState<"chat" | "workspace" | "builder">("chat");
   const [uploading, setUploading] = useState(false);
@@ -219,7 +229,8 @@ export default function App() {
         emit({ role: "system", kind: "plan", type: "plan", message: event.message,
                steps: event.steps, options: event.options,
                estimand: event.estimand ?? null, sap_status: event.sap_status });
-        if (isActive) { setPhaseFor(ownerSid, "idle"); setConfirming(false); }
+        setPhaseFor(ownerSid, "idle");
+        setConfirmingFor(ownerSid, false);
         break;
       }
       case "review_request": {
@@ -612,6 +623,10 @@ export default function App() {
           onOption={handleOption}
           onInterrupt={handleInterrupt}
           onResume={handleResume}
+          onGoWorkspace={() => {
+            setActiveTab("workspace");
+            setFocusedPane("workspace");
+          }}
           onChartChoice={handleChartChoice}
           artifactBase={artifactBase}
           onTypeConfirm={handleTypeConfirm}
@@ -697,7 +712,11 @@ export default function App() {
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
-                onClick={() => setActiveTab(key as "chat" | "workspace" | "builder")}
+                onClick={() => {
+                  const next = key as "chat" | "workspace" | "builder";
+                  setActiveTab(next);
+                  setFocusedPane((prev) => (prev === next ? null : next));
+                }}
                 className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   activeTab === key ? "bg-white text-primary-dark" : "text-white/80 hover:text-white"
                 }`}
@@ -710,7 +729,7 @@ export default function App() {
         </div>
       </header>
 
-      {isDesktop ? (
+      {isDesktop && focusedPane === null ? (
         <main className="flex min-h-0 flex-1 pt-14">
           <section
             style={{ width: chatWidth }}
@@ -726,6 +745,30 @@ export default function App() {
           <section
             style={{ width: builderWidth }}
             className="flex min-h-0 shrink-0 flex-col bg-surface-card/60"
+          >
+            {builderPane}
+          </section>
+        </main>
+      ) : isDesktop ? (
+        <main className="flex min-h-0 flex-1 pt-14">
+          <section
+            className={`flex min-h-0 w-full flex-col bg-surface-card/60 ${
+              activeTab === "chat" ? "flex" : "hidden"
+            }`}
+          >
+            {chatPane}
+          </section>
+          <section
+            className={`flex min-h-0 w-full flex-col bg-surface-card/60 ${
+              activeTab === "workspace" ? "flex" : "hidden"
+            }`}
+          >
+            {workspacePane}
+          </section>
+          <section
+            className={`flex min-h-0 w-full flex-col bg-surface-card/60 ${
+              activeTab === "builder" ? "flex" : "hidden"
+            }`}
           >
             {builderPane}
           </section>

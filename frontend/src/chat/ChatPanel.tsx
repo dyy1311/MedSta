@@ -41,6 +41,7 @@ export interface Props {
   onRevise: (note: string) => void;
   onOption: (optionId: string, content?: string) => void;
   onInterrupt: () => void;
+  onGoWorkspace: () => void;
   onResume: () => void;
   artifactBase: string;
 }
@@ -60,6 +61,7 @@ export default function ChatPanel({
   onRevise,
   onOption,
   onInterrupt,
+  onGoWorkspace,
   onResume,
   chartConfig,
   typeReview,
@@ -164,6 +166,7 @@ export default function ChatPanel({
               artifactBase={artifactBase}
               onAccept={onAccept}
               onRevise={onRevise}
+              onGoWorkspace={onGoWorkspace}
             />
           );
         })}

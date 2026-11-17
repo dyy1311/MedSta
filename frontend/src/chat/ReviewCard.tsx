@@ -10,6 +10,8 @@ interface Props {
   artifactBase: string;
   onAccept: () => void;
   onRevise: (note: string) => void;
+  /** 点击「前往工作区」时切换 Tab（041 修复：链接此前无实际行为） */
+  onGoWorkspace?: () => void;
 }
 
 function StrategyPanel({ result }: { result: Record<string, unknown> }) {
@@ -59,7 +61,14 @@ function MethodNote({ note }: { note: string }) {
   );
 }
 
-export default function ReviewCard({ report, delivered, artifactBase, onAccept, onRevise }: Props) {
+export default function ReviewCard({
+  report,
+  delivered,
+  artifactBase,
+  onAccept,
+  onRevise,
+  onGoWorkspace,
+}: Props) {
   const [revising, setRevising] = useState(false);
   const [note, setNote] = useState("");
   const warnings = report.steps
@@ -117,9 +126,13 @@ export default function ReviewCard({ report, delivered, artifactBase, onAccept, 
               <p className="mt-1 text-[11px] leading-relaxed text-warn">{finding.caveat}</p>
             ) : null}
             {step.table?.rows?.length ? (
-              <p className="mt-1.5 text-[11px] text-primary">
-                已生成统计表格（{step.table.rows.length} 行）→ 前往「工作区」查看与导出
-              </p>
+              <button
+                type="button"
+                onClick={() => onGoWorkspace?.()}
+                className="mt-1.5 cursor-pointer text-left text-[11px] text-primary underline decoration-primary/40 hover:decoration-primary"
+              >
+                已生成统计表格（{step.table.rows.length} 行）→ 点击前往「工作区」查看与导出报告
+              </button>
             ) : null}
             <StrategyPanel result={step.result} />
             {typeof step.result?.method_note === "string" && step.result.method_note.trim() ? (

@@ -380,7 +380,7 @@ describe("会话流交互", () => {
       "href",
       "/export/s1/0?format=xlsx"
     );
-    expect(within(workspaceSection).getByText("执行产出（1）")).toBeInTheDocument();
+    expect(within(workspaceSection).getByText("执行产出（1 图）")).toBeInTheDocument();
     expect(within(workspaceSection).getByRole("img")).toHaveAttribute(
       "src",
       "/data/s1/d1/artifacts/step_0_describe_histogram.png"

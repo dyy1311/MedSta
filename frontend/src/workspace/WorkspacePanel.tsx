@@ -247,12 +247,12 @@ export default function WorkspacePanel({
                 </div>
               </div>
             )}
-            {charts.length > 0 && (
+            {reports.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center gap-2">
                   <BarChart3 className="h-4 w-4 text-primary" />
                   <span className="text-sm font-semibold text-primary-dark">
-                    执行产出（{charts.length}）
+                    {`执行产出${charts.length > 0 ? `（${charts.length} 图）` : ""}`}
                   </span>
                   {reports.length > 0 && (
                     <span className="ml-auto flex items-center gap-1.5 text-xs">

@@ -140,6 +140,33 @@ def test_unknown_chart_and_missing_group_are_rejected(sample_df, tmp_path) -> No
         )
 
 
+def test_grouped_bar_categorical_uses_contingency_counts(tmp_path) -> None:
+    """修复回归：分类列的分组柱状图按列联表计数绘制（此前误用均值路径画空图）。"""
+    frame = pd.DataFrame(
+        {"有无空洞": ["0", "1", "0", "1"], "大小便障碍": ["0", "1", "0", "1"]}
+    )
+    step = _step(
+        "grouped_bar",
+        "chi_square",
+        ["有无空洞", "大小便障碍"],
+        {"row_column": "有无空洞", "col_column": "大小便障碍"},
+    )
+    result = {
+        "table": {
+            "columns": ["有无空洞", "0", "1"],
+            "rows": [
+                {"有无空洞": "0", "0": 5, "1": 22},
+                {"有无空洞": "1", "0": 14, "1": 9},
+            ],
+        }
+    }
+
+    path = plotting.render_chart(frame, step, tmp_path, 0, result=result)
+
+    assert path.is_file()
+    assert path.stat().st_size > 1000
+
+
 def test_default_chart_mapping_by_column_type() -> None:
     """B14: 类型驱动默认图表：索引→折线、类别/等级→柱状、连续→直方图。"""
     assert plotting.default_chart_for("index") == "line"
