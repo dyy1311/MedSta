@@ -55,6 +55,8 @@ class AnswerReply(BaseModel):
     answer: str
     caveats: list[str] = Field(default_factory=list)
     unverified_numbers: list[str] = Field(default_factory=list)
+    # 043 输入守卫：问题与本次统计结果无关时为 true（宿主替换为范围提示）
+    off_topic: bool = False
 
 
 class _RawPayload(BaseModel):
@@ -170,6 +172,10 @@ _INTERPRET_FIELDS = {
 _ANSWER_FIELDS = {
     "answer": (str, "针对用户问题的回答，只基于给定证据，禁止因果断言"),
     "caveats": (list, "回答的适用范围或局限：0–3 条字符串"),
+    "off_topic": (
+        bool,
+        "问题与本次统计分析结果无关（闲聊、通用知识、其他任务）时为 true",
+    ),
 }
 
 
@@ -378,6 +384,17 @@ class InterpretationAgent:
                 reply = AnswerReply.model_validate(raw)
             except Exception:
                 continue
+            if reply.off_topic:
+                # 043 输入守卫：问题与统计结果无关，宿主替换为范围提示（不烧正式回答）
+                return AnswerReply(
+                    answer=(
+                        "该问题超出了本次统计分析结果的问答范围。"
+                        "请围绕已交付的分析结果提问（如某项结果的含义、显著性、适用局限）。"
+                    ),
+                    caveats=[],
+                    unverified_numbers=[],
+                    off_topic=True,
+                )
             text = str(reply.answer).strip()
             if not text:
                 continue

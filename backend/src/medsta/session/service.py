@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import pathlib
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -26,6 +27,33 @@ from medsta.session.persistence import SNAPSHOT_VERSION, SessionStore
 from medsta.stats.registry import HARD_ISSUE_CODES, ToolIssue, get_tool, validate_plan
 
 SendFn = Callable[[dict], Awaitable[None]]
+
+# 043 输入守卫：纯问候/致谢/告别等明显闲聊，宿主直接拒绝（不调模型，零 token）
+_CHITCHAT_ONLY = re.compile(
+    r"^(你好|您好|hi|hello|hey|嗨|哈喽|谢谢|多谢|感谢|辛苦了|再见|拜拜|晚安|早安|"
+    r"好的|收到|ok|okay|嗯+|哦+)[\s!！.。~～?？,，]*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_chitchat(text: str) -> bool:
+    """廉价预筛：明显闲聊/无意义输入直接拒，可疑的交给模型自检。"""
+    content = text.strip()
+    if not content:
+        return True
+    if _CHITCHAT_ONLY.match(content):
+        return True
+    return len(content) < 2
+
+
+async def _reject_chat(send: SendFn, reason: str) -> None:
+    await send(
+        {
+            "type": "chat_rejected",
+            "reason": reason or "该输入与统计分析任务无关。请描述您的统计需求"
+            "（例如：比较两组疗效、检验某指标差异、分析变量相关性）。",
+        }
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +378,11 @@ class SessionService:
             )
 
     async def _on_chat(self, session_id: str, event: dict, send: SendFn) -> None:
+        # 043 输入守卫（第一层，零 token）：明显闲聊直接拒绝，先于模型/数据检查
+        raw_content = str(event.get("content", "") or "").strip()
+        if _looks_like_chitchat(raw_content):
+            await _reject_chat(send, "输入过短或为问候语。")
+            return
         session = manager.get(session_id)
         assert session is not None
         if session.data is None:
@@ -438,6 +471,14 @@ class SessionService:
                         continue
                     raise
             assert plan is not None
+            if getattr(plan, "off_topic", False):
+                # 043 输入守卫（第二层）：模型自检输入与统计任务无关——不进入方案流程
+                # （phase 由前端处理 chat_rejected 帧时重置为 idle）
+                await _reject_chat(
+                    send,
+                    str(getattr(plan, "off_topic_reason", "") or ""),
+                )
+                return
             session.plan = plan
             self._requests[session_id] = content
             manager.transition(session_id, SessionStatus.DISCUSSING)

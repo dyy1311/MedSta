@@ -205,6 +205,7 @@ export type WsEvent =
     }
   | { type: "delivered"; report: ExecutionReport }
   | { type: "back_to_discussion"; message: string }
+  | { type: "chat_rejected"; reason: string }
   | { type: "stream"; channel: string; delta: string }
   | {
       type: "progress";

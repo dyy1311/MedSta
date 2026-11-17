@@ -347,6 +347,18 @@ export default function App() {
       case "column_type_suggestions":
         setColumnSuggestions((event as unknown as { suggestions: typeof columnSuggestions }).suggestions ?? []);
         break;
+      case "chat_rejected":
+        // 043 输入守卫：闲聊/无关请求被拒——notice 气泡引导用户描述统计需求
+        if (isActive) {
+          setPhaseFor(ownerSid, "idle");
+          streamTextRef.current[ownerSid] = "";
+        }
+        emit({
+          role: "system",
+          kind: "notice",
+          content: (event as unknown as { reason: string }).reason,
+        });
+        break;
       case "error":
         if (isActive) {
           setPhaseFor(ownerSid, "idle");

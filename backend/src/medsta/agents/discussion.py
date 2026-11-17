@@ -109,6 +109,9 @@ class AnalysisPlan(BaseModel):
     estimand: EstimandSpec | None = Field(
         default=None, description="估计目标；模型无法确定时可缺省"
     )
+    # 043 输入守卫：模型自检输入是否与统计任务无关（无关时不进入方案流程，省 token）
+    off_topic: bool = Field(default=False, description="输入与统计分析任务无关时为 true")
+    off_topic_reason: str = Field(default="", description="off_topic 为 true 时的一句话说明")
 
     def method_summary(self) -> str:
         return " -> ".join(f"{s.title}({s.method})" for s in self.steps)
@@ -162,6 +165,14 @@ _OUTPUT_FIELDS = {
         list,
         "行动选项数组，每项含 id(str, 唯一)/label(str)/"
         "action(confirm|revise|explain|custom|supplement)/description(str)",
+    ),
+    "off_topic": (
+        bool,
+        "输入与统计分析任务无关（闲聊、写作、翻译、代码等）时为 true；统计需求恒为 false",
+    ),
+    "off_topic_reason": (
+        str,
+        "off_topic 为 true 时的一句话说明（引导用户描述统计需求），否则留空",
     ),
     "estimand": (
         object,

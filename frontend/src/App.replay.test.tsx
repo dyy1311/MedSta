@@ -54,4 +54,22 @@ describe("App 事件流回放（036）", () => {
 
     expect(screen.getByText("修正意见：换个图")).toBeInTheDocument();
   });
+
+  it("chat_rejected 帧渲染 notice 气泡（043 输入守卫）", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle("新建会话空间"));
+    await screen.findByRole("button", { name: /^会话 1/ });
+
+    act(() => {
+      socket().emit({
+        type: "chat_rejected",
+        reason: "该输入与统计分析任务无关。请描述您的统计需求。",
+        seq: 5,
+      });
+    });
+
+    expect(
+      await screen.findByText("该输入与统计分析任务无关。请描述您的统计需求。")
+    ).toBeInTheDocument();
+  });
 });

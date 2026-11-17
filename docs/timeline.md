@@ -52,6 +52,7 @@
 
 | 日期 | 类型 | 内容 | 原因/依据 |
 |---|---|---|---|
+| 2026-11-17 | 需求 | 043 输入守卫——模型只服务统计任务：两层拦截，第一层宿主预筛 `_looks_like_chitchat`（纯问候/致谢/告别/单字符，零 token 直接拒绝，先于模型与数据检查）；第二层模型同请求自检——`AnalysisPlan`/`AnswerReply` 增 `off_topic`/`off_topic_reason` 契约字段（不增加额外调用），模型判定无关时宿主拦截：讨论态发 `chat_rejected`（前端 notice 气泡引导描述统计需求、phase 重置 idle），答疑态替换为范围提示 | 用户需求「避免闲聊无关问题烧 token」；Owner 合规——守门是成本控制非语义决策，语义判断仍归模型；后端 481 passed（+9）、前端 86 passed（+1） |
 | 2026-11-17 | 需求 | 042 拖拽导入数据文件：`hooks/useFileDrop`（window 级 dragover/dragleave/drop；文件类拖拽才响应、扩展名白名单 csv/xlsx/xls、多文件顺序上传避免并发竞态）；拖入悬停显示全屏遮罩（虚线卡片「松开鼠标导入数据文件」），drop 后复用现有上传管道（自动建会话/绑定工作区） | 用户需求「增加拖拽导入文件功能」；hook 可单测（jsdom Event+defineProperty 模拟 dataTransfer）；前端 85 passed（+5）；多用户化顺延为 043 |
 | 2026-11-17 | 需求 | 041 模型辅助列类型确认（AI 确认数值类型）：`agents/type_advisor.py` ColumnTypeAdvisor（结构化契约 name/suggested_type/confidence/reason，宿主校验非法建议丢弃进 skipped）；证据白名单（列名/规则推断类型/前 5 个唯一样本值/缺失数/基数/统计，不传全量数据）；WS `suggest_column_types` → `column_type_suggestions`；前端 ProfileTable「AI 确认类型」按钮 + 建议徽标（类型+置信度+理由）+ 单列采纳/全部采纳（复用单列与批量 PATCH，用户敲定）；未配模型返回 MODEL_UNAVAILABLE 配置提示 | 用户需求「设计一个工具，能让模型帮我确认数值类型」；Owner 合规：模型只做语义建议、宿主校验、用户保留敲定权；后端 472 passed、前端 80 passed |
 | 2026-11-17 | 需求 | 用户实测五项缺陷修复：①聊天内「前往工作区查看与导出」由纯文本改为可点击按钮（切 Tab+聚焦），执行产出区条件改 reports（无图有表也显示，导出报告按钮可见）；②顶部 Tab 增聚焦模式——点击将该栏最大化（再点恢复三栏并排），桌面三栏不再「点了没反应」；③装配器 column 参数全部改下拉选择上传表格的列（group_by/group_column 等，杜绝手填出错）；④卡方/McNemar 的分组柱状图改按列联表计数绘制（此前误用数值均值路径画出空图）；⑤切会话/新会话时重置绘图确认、补图、类型审阅交互卡（此前全局单例跨会话残留） | 用户实测报告五项；⑤根因是交互态全局单例，per-session 改造经测试验证有回归风险后改为「切会话重置」等价方案；后端 468 passed、前端 78 passed、构建通过、浏览器冒烟确认 |
