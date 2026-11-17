@@ -119,6 +119,19 @@ describe("App 布局骨架", () => {
     expect(screen.getByText("未绑定")).toBeInTheDocument();
   });
 
+  it("拖拽文件悬停显示导入遮罩（042）", async () => {
+    render(<App />);
+
+    const event = new Event("dragover");
+    Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"] } });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    expect(await screen.findByTestId("drop-overlay")).toBeInTheDocument();
+    expect(screen.getByText("松开鼠标导入数据文件")).toBeInTheDocument();
+  });
+
   it("能力抽屉按需加载并展示方法与规划中能力", async () => {
     render(<App />);
 

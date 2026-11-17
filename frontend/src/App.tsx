@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { BarChart3, Boxes, MessagesSquare, Wrench } from "lucide-react";
+import { BarChart3, Boxes, CloudUpload, MessagesSquare, Wrench } from "lucide-react";
 import type {
   ChartConfigRequest, ChatMessage, ExecutionReport, Phase, PlotSuggestStep,
   TableProfile, TypeReviewRequest, WsEvent, WorkspaceTab,
@@ -15,6 +15,7 @@ import WorkspacePanel from "./workspace/WorkspacePanel";
 import ChainBuilder from "./builder/ChainBuilder";
 import type { ChainStep } from "./builder/ChainBuilder";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { useFileDrop } from "./hooks/useFileDrop";
 
 function upsertReport(reports: ExecutionReport[], report: ExecutionReport, replaceLast: boolean) {
   const next = [...reports];
@@ -543,6 +544,9 @@ export default function App() {
     setActiveWorkspaceId(datasetId);
   };
 
+  // 042 全局拖拽导入：拖数据文件到窗口任意位置即可上传（复用现有上传管道）
+  const { dragOver } = useFileDrop((file) => handleUpload(file));
+
   const streamText = activeChatIdResolved ? streamTextRef.current[activeChatIdResolved] ?? "" : "";
   const progress = activeChatIdResolved ? progressRef.current[activeChatIdResolved] ?? null : null;
   const artifactBase =
@@ -810,6 +814,19 @@ export default function App() {
       )}
 
       <CapabilityDrawer open={capabilitiesOpen} onClose={() => setCapabilitiesOpen(false)} />
+
+      {dragOver && (
+        <div
+          data-testid="drop-overlay"
+          className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-primary-dark/70 backdrop-blur-[2px]"
+        >
+          <div className="animate-fade-in-up rounded-2xl border-2 border-dashed border-primary-cyan/60 bg-primary-dark/90 px-10 py-8 text-center shadow-pop">
+            <CloudUpload className="mx-auto h-10 w-10 text-primary-cyan" />
+            <p className="mt-2 text-base font-semibold text-white">松开鼠标导入数据文件</p>
+            <p className="mt-1 text-xs text-white/60">支持 CSV / Excel（.csv / .xlsx / .xls），可一次多个</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
