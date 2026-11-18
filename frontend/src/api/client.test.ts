@@ -26,7 +26,8 @@ describe("client REST 契约", () => {
     const data = await fetchCapabilities();
 
     expect(data.tools[0].name).toBe("describe");
-    expect(fetchSpy).toHaveBeenCalledWith("/capabilities");
+    // 044：apiFetch 统一携带认证头（匿名时为空对象）
+    expect(fetchSpy).toHaveBeenCalledWith("/capabilities", { headers: {} });
   });
 
   it("fetchCapabilities 在非 JSON 响应时给出可诊断错误", async () => {
@@ -55,7 +56,10 @@ describe("client REST 契约", () => {
     ]);
 
     await expect(createSession()).resolves.toEqual({ session_id: "s1", status: "discussing" });
-    expect(fetchSpy).toHaveBeenCalledWith("/sessions", { method: "POST" });
+    expect(fetchSpy).toHaveBeenCalledWith("/sessions", {
+      method: "POST",
+      headers: {},
+    });
   });
 
   it("uploadData 以 multipart 提交文件并返回画像", async () => {

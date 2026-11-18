@@ -52,6 +52,7 @@ class SessionData:
 @dataclass
 class Session:
     session_id: str
+    owner: str = "local"
     status: SessionStatus = SessionStatus.DISCUSSING
     datasets: dict = field(default_factory=dict)  # dataset_id -> SessionData
     active_dataset_id: str | None = None
@@ -71,11 +72,15 @@ class SessionManager:
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
 
-    def create_session(self, session_id: str | None = None) -> Session:
+    def create_session(self, session_id: str | None = None, owner: str = "local") -> Session:
         """创建会话；指定 session_id 供快照恢复使用（状态由恢复方直接赋值）。"""
-        session = Session(session_id=session_id or uuid.uuid4().hex)
+        session = Session(session_id=session_id or uuid.uuid4().hex, owner=owner)
         self._sessions[session.session_id] = session
         return session
+
+    def list_by_owner(self, owner: str) -> list[Session]:
+        """044：按归属列出会话（多用户隔离）。"""
+        return [s for s in self._sessions.values() if s.owner == owner]
 
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)

@@ -1,7 +1,20 @@
 import type { Capabilities, TableProfile, WsEvent } from "../types";
 
+/** 044：登录令牌（localStorage）；所有请求与 WS 自动携带 */
+export function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("medsta_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(path, {
+    ...init,
+    headers: { ...authHeaders(), ...(init.headers ?? {}) },
+  });
+}
+
 export async function fetchCapabilities(): Promise<Capabilities> {
-  const response = await fetch("/capabilities");
+  const response = await apiFetch("/capabilities");
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("application/json")) {
     throw new Error(`能力目录接口异常：HTTP ${response.status} (${contentType || "无 content-type"})`);
@@ -10,7 +23,7 @@ export async function fetchCapabilities(): Promise<Capabilities> {
 }
 
 export function createSession(): Promise<{ session_id: string; status: string }> {
-  return fetch("/sessions", { method: "POST" }).then((r) => r.json());
+  return apiFetch("/sessions", { method: "POST" }).then((r) => r.json());
 }
 
 export async function uploadData(
@@ -19,7 +32,7 @@ export async function uploadData(
 ): Promise<{ type: string; dataset_id: string; name: string; profile: TableProfile }> {
   const form = new FormData();
   form.append("file", file);
-  const resp = await fetch(`/sessions/${sessionId}/data`, {
+  const resp = await apiFetch(`/sessions/${sessionId}/data`, {
     method: "POST",
     body: form,
   });
@@ -63,7 +76,9 @@ export function connectSession(
 
   const connect = () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(`${proto}://${window.location.host}/ws/${sessionId}`);
+    const stored = localStorage.getItem("medsta_token");
+    const auth = stored ? `?token=${encodeURIComponent(stored)}` : "";
+    socket = new WebSocket(`${proto}://${window.location.host}/ws/${sessionId}${auth}`);
     socket.onopen = () => {
       attempt = 0;
       onStatus?.("connected");
@@ -117,7 +132,7 @@ export function updateColumnType(
   column: string,
   type: string
 ): Promise<{ type: string; dataset_id: string; profile: TableProfile }> {
-  return fetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
+  return apiFetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ column, type }),
@@ -133,7 +148,7 @@ export function updateColumnTypes(
   datasetId: string,
   types: Record<string, string>
 ): Promise<{ type: string; dataset_id: string; profile: TableProfile }> {
-  return fetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
+  return apiFetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ types }),
@@ -144,4 +159,31 @@ export function updateColumnTypes(
     }
     return response.json();
   });
+}
+
+/** 044：多用户登录（MEDSTA_USERS 未配置时后端 404，前端走匿名模式） */
+export async function login(
+  username: string,
+  password: string
+): Promise<{ token: string; username: string }> {
+  const resp = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!resp.ok) throw new Error(resp.status === 401 ? "用户名或密码错误" : `登录失败：HTTP ${resp.status}`);
+  return resp.json();
+}
+
+/** 044：当前用户的会话列表（后端重启恢复的会话由此发现） */
+export async function listSessions(): Promise<
+  { session_id: string; name: string | null; status: string; dataset_id: string | null }[]
+> {
+  const resp = await apiFetch("/sessions");
+  if (resp.status === 401) throw new Error("AUTH_REQUIRED");
+  if (!resp.ok) throw new Error(`会话列表接口异常：HTTP ${resp.status}`);
+  const payload = (await resp.json()) as {
+    sessions: { session_id: string; name: string | null; status: string; dataset_id: string | null }[];
+  };
+  return payload.sessions ?? [];
 }

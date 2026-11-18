@@ -16,6 +16,7 @@ from medsta.api.routes_report import router as report_router
 from medsta.api.routes_session import router as session_router
 from medsta.api.routes_templates import router as templates_router
 from medsta.api.ws import router as ws_router
+from medsta.session.manager import manager
 from medsta.session.service import SessionService
 
 # prod 模式前端构建产物（launcher --prod 构建后生效；dev 模式通常不存在）
@@ -63,10 +64,19 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
 def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     app = FastAPI(title="MedSta", version="0.1.0")
 
-    # 038 可选单令牌鉴权：env 未设置/空时行为与现状完全一致（零开销直通）
+    # 038/044 鉴权：MEDSTA_USERS（多用户，优先）或 MEDSTA_AUTH_TOKEN（单令牌）；
+    # 两者都未配置时行为与现状完全一致（零开销直通，owner="local"）
+    medsta_users: dict[str, str] = {}
+    for pair in (os.environ.get("MEDSTA_USERS") or "").split(","):
+        if ":" in pair:
+            name, _, password = pair.partition(":")
+            if name.strip() and password:
+                medsta_users[name.strip()] = password
+    app.state.medsta_users = medsta_users or None
+    app.state.user_tokens = {}
     auth_token = (os.environ.get("MEDSTA_AUTH_TOKEN") or "").strip()
-    app.state.auth_token = auth_token or None
-    if not app.state.auth_token:
+    app.state.auth_token = None if medsta_users else (auth_token or None)
+    if not app.state.auth_token and not medsta_users:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -76,6 +86,30 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def auth_guard(request: Request, call_next):
+        if app.state.medsta_users:
+            # 044 多用户模式：/auth/login 豁免；其余要求有效令牌并注入身份
+            if request.url.path == "/auth/login" or request.url.path == "/health":
+                return await call_next(request)
+            provided = request.headers.get("X-Auth-Token") or ""
+            if not provided:
+                bearer = request.headers.get("Authorization") or ""
+                if bearer.startswith("Bearer "):
+                    provided = bearer[len("Bearer "):].strip()
+            username = app.state.user_tokens.get(provided)
+            if username is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "未登录或令牌已失效", "hint": "请重新登录"},
+                )
+            request.state.username = username
+            # 会话归属隔离：/sessions|export|report|data/{sid}** 非 owner 一律 404
+            parts = request.url.path.strip("/").split("/")
+            if len(parts) >= 2 and parts[0] in ("sessions", "export", "report", "data"):
+                session = manager.get(parts[1])
+                if session is None or session.owner != username:
+                    return JSONResponse(status_code=404, content={"detail": "会话不存在"})
+            return await call_next(request)
+        # 038 单令牌模式（USERS 未配置时保持原行为）
         token: str | None = getattr(app.state, "auth_token", None)
         if token:
             provided = request.headers.get("X-Auth-Token") or ""
@@ -91,6 +125,9 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
                         "hint": "请求需携带 X-Auth-Token 或 Authorization: Bearer <token>",
                     },
                 )
+            request.state.username = "local"
+        else:
+            request.state.username = "local"
         return await call_next(request)
 
     app.include_router(session_router)

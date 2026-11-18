@@ -138,8 +138,8 @@ class SessionService:
         if config is not None:
             self._interpret_config = config
 
-    def create_session(self) -> str:
-        return manager.create_session().session_id
+    def create_session(self, owner: str = "local") -> str:
+        return manager.create_session(owner=owner).session_id
 
     def attach_dataframe(self, session_id: str, *, df: pd.DataFrame, dataset_path: str,
                          name: str = "") -> str:
@@ -183,6 +183,7 @@ class SessionService:
         return {
             "version": SNAPSHOT_VERSION,
             "session_id": session_id,
+            "owner": getattr(session, "owner", "local"),
             "status": session.status.value,
             "active_dataset_id": session.active_dataset_id,
             "datasets": datasets,
@@ -223,7 +224,9 @@ class SessionService:
                 status_value = str(snapshot.get("status", "discussing"))
                 if status_value == SessionStatus.EXECUTING.value:
                     status_value = SessionStatus.DISCUSSING.value
-                session = manager.create_session(session_id=session_id)
+                session = manager.create_session(
+                    session_id=session_id, owner=str(snapshot.get("owner", "local"))
+                )
                 session.status = SessionStatus(status_value)  # 恢复不走转移表
                 for entry in snapshot.get("datasets") or []:
                     df = load_table(str(entry["path"]))

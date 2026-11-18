@@ -16,6 +16,7 @@ import ChainBuilder from "./builder/ChainBuilder";
 import type { ChainStep } from "./builder/ChainBuilder";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useFileDrop } from "./hooks/useFileDrop";
+import { listSessions, login } from "./api/client";
 
 function upsertReport(reports: ExecutionReport[], report: ExecutionReport, replaceLast: boolean) {
   const next = [...reports];
@@ -78,6 +79,44 @@ function latestPlanSteps(messages: ChatMessage[]): ChainStep[] | null {
 
 export default function App() {
   const [chatSessions, setChatSessions] = useState<ChatSessionEntry[]>([]);
+  // 044 多用户：后端启用 MEDSTA_USERS 时 401 → 登录卡；登录后加载会话列表（含恢复会话）
+  const [authNeeded, setAuthNeeded] = useState(false);
+  const [loginError, setLoginError] = useState("");
+
+  const loadSessionList = useCallback(async () => {
+    try {
+      const items = await listSessions();
+      setAuthNeeded(false);
+      setChatSessions((prev) => {
+        const known = new Set(prev.map((entry) => entry.sessionId));
+        const restored = items
+          .filter((item) => !known.has(item.session_id))
+          .map((item) => ({
+            sessionId: item.session_id,
+            datasetId: item.dataset_id,
+            name: item.name ?? "未绑定",
+          }));
+        return [...restored, ...prev];
+      });
+    } catch (error) {
+      if ((error as Error).message === "AUTH_REQUIRED") setAuthNeeded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessionList();
+  }, [loadSessionList]);
+
+  const handleLogin = async (username: string, password: string) => {
+    try {
+      const result = await login(username, password);
+      localStorage.setItem("medsta_token", result.token);
+      setLoginError("");
+      await loadSessionList();
+    } catch (error) {
+      setLoginError((error as Error).message);
+    }
+  };
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const activeChat = chatSessions.find((c) => c.sessionId === activeChatId) ?? null;
   const activeChatIdResolved = activeChat?.sessionId ?? null;
@@ -690,6 +729,52 @@ export default function App() {
       }}
     />
   );
+
+  if (authNeeded) {
+    return (
+      <div className="flex h-full items-center justify-center bg-surface-page bg-grid-page p-6">
+        <form
+          data-testid="login-card"
+          className="w-full max-w-sm space-y-3 rounded-2xl bg-surface-card p-6 shadow-card"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleLogin(
+              (event.currentTarget.elements.namedItem("username") as HTMLInputElement).value,
+              (event.currentTarget.elements.namedItem("password") as HTMLInputElement).value
+            );
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-cyan/15 ring-1 ring-primary-cyan/30">
+              <BarChart3 className="h-5 w-5 text-primary-cyan" />
+            </div>
+            <h1 className="font-display text-base font-bold text-ink">MedSta 课题组工作台</h1>
+          </div>
+          <p className="text-xs text-ink-muted">本服务已启用多用户模式，请使用课题组账号登录。</p>
+          <input
+            name="username"
+            placeholder="用户名"
+            autoComplete="username"
+            className="w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm"
+          />
+          <input
+            name="password"
+            type="password"
+            placeholder="密码"
+            autoComplete="current-password"
+            className="w-full rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm"
+          />
+          {loginError && <p className="text-xs text-danger">{loginError}</p>}
+          <button
+            type="submit"
+            className="w-full cursor-pointer rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+          >
+            登录
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col bg-surface-page bg-grid-page">

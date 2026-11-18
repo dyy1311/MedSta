@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from medsta.errors import AppError, ErrorCode
+from medsta.session.manager import manager
 
 router = APIRouter()
 
@@ -23,11 +24,21 @@ logger = logging.getLogger(__name__)
 async def session_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
 
-    # 038 可选鉴权：配置令牌时 WS 需带 ?token=<令牌>，错误即拒（close 4401）
-    expected_token: str | None = getattr(websocket.app.state, "auth_token", None)
-    if expected_token and websocket.query_params.get("token") != expected_token:
-        await websocket.close(code=4401, reason="缺少或错误的访问令牌（?token=）")
-        return
+    # 038/044 鉴权：多用户模式校验会话归属（close 4403）；单令牌模式校验令牌（4401）
+    medsta_users: dict | None = getattr(websocket.app.state, "medsta_users", None)
+    if medsta_users:
+        username = getattr(websocket.app.state, "user_tokens", {}).get(
+            websocket.query_params.get("token") or ""
+        )
+        session_for_ws = manager.get(session_id)
+        if username is None or session_for_ws is None or session_for_ws.owner != username:
+            await websocket.close(code=4403, reason="无权访问该会话")
+            return
+    else:
+        expected_token: str | None = getattr(websocket.app.state, "auth_token", None)
+        if expected_token and websocket.query_params.get("token") != expected_token:
+            await websocket.close(code=4401, reason="缺少或错误的访问令牌（?token=）")
+            return
 
     service = websocket.app.state.service
     event_log = service.event_log

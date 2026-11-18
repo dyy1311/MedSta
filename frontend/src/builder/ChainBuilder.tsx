@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, FlaskConical, ListPlus, Play, Trash2, Upload } from "lucide-react";
+import { authHeaders } from "../api/client";
 
 export interface ChainStep {
   method: string;
@@ -65,13 +66,13 @@ export default function ChainBuilder({
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/capabilities")
+    fetch("/capabilities", { headers: authHeaders() })
       .then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error(String(resp.status)))))
       .then((payload: { tools: ToolSpecView[] }) => {
         if (!cancelled) setTools(payload.tools ?? []);
       })
       .catch(() => undefined); // 目录加载失败仅影响装配，不影响既有会话
-    fetch("/templates")
+    fetch("/templates", { headers: authHeaders() })
       .then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error(String(resp.status)))))
       .then((payload: { templates: TemplateView[] }) => {
         if (!cancelled) setTemplates(payload.templates ?? []);
@@ -186,7 +187,7 @@ export default function ChainBuilder({
     try {
       const resp = await fetch(`/templates/${encodeURIComponent(name)}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ steps: chain }),
       });
       if (!resp.ok) {
@@ -219,7 +220,10 @@ export default function ChainBuilder({
 
   const removeTemplate = async (name: string) => {
     try {
-      await fetch(`/templates/${encodeURIComponent(name)}`, { method: "DELETE" });
+      await fetch(`/templates/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
       refreshTemplates();
     } catch {
       setNotice("删除失败：网络异常");

@@ -59,10 +59,17 @@ def fake_agent(payload: dict) -> DiscussionAgent:
     return DiscussionAgent(request_factory=lambda: RecordingFakeRequest(payload))
 
 
-def upload_csv(client, session_id: str, content: bytes = CSV, name: str = "cohort.csv") -> dict:
+def upload_csv(
+    client,
+    session_id: str,
+    content: bytes = CSV,
+    name: str = "cohort.csv",
+    headers: dict | None = None,
+) -> dict:
     response = client.post(
         f"/sessions/{session_id}/data",
         files={"file": (name, io.BytesIO(content), "text/csv")},
+        headers=headers or {},
     )
     assert response.status_code == 200, response.text
     return response.json()
