@@ -217,8 +217,13 @@ def test_revise_returns_to_discussion_with_note(client, app, session_id: str) ->
         ws.send_json({"type": "review", "decision": "revise", "content": "不要直方图"})
         _, back = collect_until(ws, {"back_to_discussion"})
 
-        assert "继续讨论" in back["message"]
+        assert "修正意见" in back["message"]
         assert manager.get(session_id).status.value == "discussing"
+        # 契约升级（047 后续）：带意见的 revise 直接接续讨论，模型按修正重出方案，
+        # 用户不必再手动发一条（此前只回「已记录修正意见」，重复点提交会撞 NO_ACTIVE_RUN）
+        _, plan = collect_until(ws, {"plan", "error"})
+        assert plan["type"] == "plan"
+        assert plan["steps"]
 
 
 def test_ws_rejects_malformed_frame_without_dropping(client, app, session_id: str) -> None:

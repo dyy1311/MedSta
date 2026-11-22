@@ -62,7 +62,8 @@ describe("App 多用户登录（044）", () => {
       expect(getStatus()).toBe(200);
     });
     expect(await screen.findByRole("button", { name: /^会话（/ })).toBeInTheDocument();
-    expect(screen.getByText(/cohort\.csv/)).toBeInTheDocument(); // 恢复会话条目显示绑定表格名
+    // 恢复会话条目显示绑定表格名（自动选中后 Tab 与工作区/绑定提示都会出现该名字）
+    expect(screen.getAllByText(/cohort\.csv/).length).toBeGreaterThan(0);
     expect(localStorage.getItem("medsta_token")).toBe("tok-1");
   });
 

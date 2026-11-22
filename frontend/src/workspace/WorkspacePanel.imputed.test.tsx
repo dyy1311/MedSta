@@ -10,6 +10,7 @@ function workspace(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     name: "cohort.csv",
     profile: PROFILE,
     reports: [],
+    sessionId: "s1",
     ...overrides,
   };
 }

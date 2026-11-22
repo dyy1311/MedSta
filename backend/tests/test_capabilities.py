@@ -107,6 +107,7 @@ async def test_option_confirm_runs_plan(env) -> None:
     await service.handle(session_id, {"type": "chat", "content": "分析"}, send)
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "option", "option_id": "confirm"}, send)
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     assert any(m["type"] == "review_request" for m in sent)
 
 

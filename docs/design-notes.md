@@ -245,3 +245,78 @@ DELIVERED→{DISCUSSING, DELIVERED}。非法转移抛 `InvalidStateTransition(Va
   或「不支持」；`planned` 的 `name` 不得与注册表键重名。前者逼作者表态，后者防「已实现仍挂 planned」。
 - **落地一个能力时，必须回头改 planned**：这是唯一需要人记住的环节；测试只能在下一次跑时提醒
   「描述里没有未实现范围」，不能提醒「你该把它删了」。
+
+## 18. 审查整改与上线收尾的架构决策（批次 1–11，spec 032–046 期间）
+
+- **执行期后台化（批次 8）**：Agently `async_start`（auto_close=False）阻塞至流程首个暂停点、
+  `async_close` 会 `_drain_pending_tasks` 等计算线程收尾——因此句柄创建与启动必须拆分
+  （create 同步登记、start 进后台任务），中断路径不得在 WS 收包循环里等 close
+  （移交被取消任务的 CancelledError 后台路径）。这是「源码验证先于设计」的一次直接兑现。
+- **事件流 IO 策略（批次 3）**：EventLog 常规帧 O(1) 追加；超阈值轮转用 tmp + os.replace 原子替换、
+  保留尾部一半——回放语义（last_seq 缺口补发）不变，崩溃不再截断整日志。
+- **测试环境与 .env（批次 7）**：conftest 强制 `build_gateway` 抛错（real_llm 豁免）——
+  「测试不得依赖 .env」由约定变机制；模块级 app 惰性化（PEP 562）消除 import 期真实数据根
+  恢复的副作用，全量套件从 250s 提速到 ~55s。
+- **数据产出型工具约定（028/045）**：impute 与清洗工具统一「产物 CSV + `_next_frame`（037 链间管道）+
+  service 注册 dataset_added（不切 active）」三件套；无变化（如去重无重复行）不产数据集。
+- **鉴权边界（038/044 + 批次 5/11）**：直链（图片/下载）无法带请求头 → `?token=` 与 WS 同口径；
+  login 用 compare_digest + 60s 窗口 5 次失败 429（内存计数，单进程适用；多副本需换共享存储）。
+
+## 19. 上线前终审的行为与契约收口（2026-11-19）
+
+- **工作区激活必须前后端同一真相源**：后端 `active_dataset_id` 决定「chat 用哪张表」，
+  而此前前端点工作区标签只改本地显示、从不通知后端（`workspace` WS 事件与
+  `POST /sessions/{sid}/workspace/{dsid}/activate` 都存在但无人调用）。后果是
+  「看到新表、分析旧表」的静默错分析。结论：切标签走 REST 激活（与 WS 连接状态解耦：
+  跨会话切标签时 WS 正在重连），后端激活后落快照；前端 `data_profile` 事件增加
+  `active` 语义位——只有「首次绑定」与「显式激活」才改会话绑定，已绑定会话再上传
+  只是新增标签（046 的既有约定不变）。
+- **静态外壳与业务数据分离鉴权**：`MEDSTA_USERS`/`MEDSTA_AUTH_TOKEN` 下若连 `/` 与
+  `/assets/*` 也要令牌，浏览器无法加载登录页与脚本（prod 单端口 + 鉴权必然白屏）。
+  放行范围限定为 SPA 入口与构建产物（`_is_public_shell`），`/data`、`/export`、
+  `/report`、`/sessions` 等业务路径仍强制令牌。
+- **图表选择白名单来自注册表**：`chart_config` 每步下发 `charts`（`ToolSpec.charts`），
+  前端只列可选项；后端对越界值降级为该工具首个可用图。此前前端列全量枚举，
+  用户可为 describe 选 survival_curve，渲染失败虽被隔离（`chart_error`），
+  但用户看到的是「结果里没有图」。
+- **后台任务槽位按任务身份释放**：interrupt 的取消是异步投递的，被取消的旧任务
+  与新任务会短暂共存。收尾必须 `asyncio.current_task() is self._tasks[sid]` 才 pop/discard，
+  否则旧任务会把新任务的登记与忙锁一起清掉（interrupt 失效 + 同会话双跑）。
+- **删除会话必须清理旁路状态**：`_requests`/`_pending_chats`/`_revision_notes`/`_busy`
+  等按 session_id 索引的字典此前只清 plans/reports，删除后随进程常驻（内存泄漏）。
+- **`.xls` 是依赖问题不是代码问题**：pandas 的 .xls 引擎是 xlrd（openpyxl 只支持 .xlsx）。
+  pyproject 补 `xlrd>=2.0`，并在缺包时给「另存为 .xlsx」的可执行提示而非 ImportError。
+- **WS 4401/4403 不再无限重连**：令牌存于服务端内存表，后端重启后全部失效；
+  前端收到 4401/4403 应停止退避重连并回到登录卡，而不是每 10s 撞一次墙。
+- **刷新恢复：持久快照 + 回放增量（2026-11-20）**：右栏不能只由 WS 事件流重建——事件流按阈值轮转
+  （035 只保留尾部一半），长时间会话的 `data_profile` 早已被裁掉，刷新后必然「左栏有、右栏空」。
+  结论：新增 `GET /sessions/{sid}/workspace` 作为持久真相源，回放只做增量；两者按
+  `dataset_id`/`report_id` 幂等合并（`upsertReport` 必须按 `report_id` 去重，否则回放重放历史
+  `review_request` 会堆出重复统计表与图表）。
+- **工作区必须带会话归属**：`WorkspaceTab` 增加必填 `sessionId`，标签、计数、`activeWorkspace`
+  选取都限定当前会话；切到无数据集的会话时清空 `activeWorkspaceId`。此前的全局平面数组 +
+  残留 id 会让右栏停在其他会话的表/报告上，属「静默错看数据」级别的问题。
+- **默认会话恢复**：`activeChatId` 曾恒为初始 null，刷新后左右两栏都是空态。现按
+  `localStorage.medsta_active_session` 回退到列表首个；但「当前阶段」仍以服务端为准——
+  `resumed` 帧的 `stage` 用于纠正回放期被历史 `progress` 帧推上去的 `phase`。
+- **REST 变更必须经 `service.broadcast`（2026-11-20）**：`SessionService` 维护会话级发送器注册表
+  （WS 连接注册 `send_frame`、`finally` 摘除），`broadcast` 先 `EventLog.commit`（分配 seq + 落盘）
+  再逐个推送在线连接。这样「工作台改列类型」与「会话区留记录」是**同一次服务端事实**：在线即时到达、
+  离线（无连接/刷新前）也能通过 resume 回放重建。反面做法是前端本地 emit 一条假提示——多标签页不同步、
+  刷新即丢，不能作为可核对记录。因此 REST 路由可 `async` + `run_in_threadpool` 执行 pandas 变更。
+- **AI 建议的消费语义（2026-11-20）**：`column_type_suggestions` 到达后建议条持久显示；用户采纳
+  （逐列或全部）时前端按列消费、服务端在 `type_confirmed` 里再清一次（幂等）；模型分析期间按钮进入
+  加载态并给出「表越大越慢」的预期管理，另有 90s 超时兜底——模型网关无响应时不能永久卡住入口。
+- **方案即流程图，执行即节点交付（047）**：一次性让模型产出「完整管线 + 全部参数」既不 stable 也难以校验。
+  现在 `steps[].depends_on` + `plan_flow()` 把方案表达成图（节点必须是注册表工具，缺省依赖宿主补线性链），
+  `plan` 事件同时下发结构化 `flow` 与 `mermaid` 文本；用户确认的是**图**，不是一段自然语言。
+- **失败隔离的粒度从「执行」下沉到「节点」**：executor 每步回调 `on_step_result`，服务端逐条下发 `step_result`；
+  失败节点保留在报告里（`status=failed` + error），后续节点继续。重试不是「整条链重来」而是
+  `retry_step {index, overrides}` → 重跑该节点及下游（保留链间管道 `_next_frame`）。
+- **模型在修正期的角色是「局部重写」**：`amend_step` 只让模型返回一个节点（`steps` 长度必须为 1），
+  输入含当前图、该节点、失败原因、用户补充与会话上下文快照；宿主校验后**就地替换并保留原 depends_on/step_id**，
+  图结构不被模型打乱。这与「讨论期让模型出整图」是两个不同的 owner 边界。
+- **上下文分层（owner → session）**：`SessionContext` 只存可安全注入的最小事实（数据摘要、节点状态、失败原因、
+  用户补充，≤2000 字），不存原始数据；`SessionContextStore` 刻意保留 owner 维度，多用户上线无需改调用方。
+- **审计记录是旁路**：`_record` 写入失败（SQLite 锁、事件循环切换）只记 warning。此前它会把正常讨论变成
+  `EXECUTION_FAILED`——这也是「偶发失败」用例的真实根因（Agently store 的 Lock 绑定在另一事件循环）。

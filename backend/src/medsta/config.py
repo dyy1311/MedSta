@@ -216,6 +216,9 @@ def _extract_delta(chunk: Any) -> str:
         delta = payload["choices"][0]["delta"]
     except (ValueError, KeyError, IndexError, TypeError):
         return ""
+    if not isinstance(delta, dict):
+        # 部分兼容端末 chunk 的 delta 为 null：此前 AttributeError 不在捕获元组（批次11）
+        return ""
     piece = delta.get("reasoning_content") or delta.get("content") or ""
     return str(piece)
 

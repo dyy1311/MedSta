@@ -53,7 +53,9 @@ def test_real_model_plan_and_delivery(client, app, session_id: str) -> None:
         }
         ws.send_json({"type": "type_confirm", "types": types})
 
-        _, plan = collect_until(ws, {"plan", "error"}, limit=5000)
+        # 帧预算放大：推理型模型（如 deepseek-flash）的思考流可达数千帧，
+        # 5000 帧预算会把「正在正常思考」误判为失败（批次 11 上线收尾诊断）
+        _, plan = collect_until(ws, {"plan", "error"}, limit=60000)
         assert plan["type"] == "plan", plan
         assert plan["steps"], "模型未给出任何步骤"
         for step in plan["steps"]:

@@ -120,18 +120,14 @@ def _ci(survival: float, se: float) -> tuple[float, float, bool]:
 
 
 def _median_survival(points: list[dict[str, Any]]) -> tuple[float | None, bool]:
-    if not points:
-        return None, False
-    if points[0]["survival"] <= 0.5:
-        return points[0]["time"], True
-    for previous, current in zip(points, points[1:]):
-        if previous["survival"] > 0.5 >= current["survival"]:
-            span = previous["survival"] - current["survival"]
-            if span <= 0:
-                return current["time"], True
-            ratio = (previous["survival"] - 0.5) / span
-            median = previous["time"] + ratio * (current["time"] - previous["time"])
-            return float(median), True
+    """中位生存期 = S(t)≤0.5 的最小观测时间（KM 阶梯定义，教材 §14-2 / R 口径）。
+
+    线性插值会系统性偏离阶梯函数的标准定义（S 0.6→0.4 时插值给 15，
+    标准给 20），审查后改回阶梯口径。
+    """
+    for point in points:
+        if point["survival"] <= 0.5:
+            return float(point["time"]), True
     return None, False
 
 

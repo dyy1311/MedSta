@@ -4,25 +4,32 @@
 
 @layer base {
   @font-face {
-    font-family: "Space Grotesk";
+    font-family: "Figtree";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-400-normal.woff2") format("woff2");
+    src: url("@fontsource/figtree/files/figtree-latin-400-normal.woff2") format("woff2");
   }
   @font-face {
-    font-family: "Space Grotesk";
+    font-family: "Figtree";
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-500-normal.woff2") format("woff2");
+    src: url("@fontsource/figtree/files/figtree-latin-500-normal.woff2") format("woff2");
   }
   @font-face {
-    font-family: "Space Grotesk";
+    font-family: "Figtree";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("@fontsource/figtree/files/figtree-latin-600-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Figtree";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url("@fontsource/space-grotesk/files/space-grotesk-latin-700-normal.woff2") format("woff2");
+    src: url("@fontsource/figtree/files/figtree-latin-700-normal.woff2") format("woff2");
   }
 
   html,
@@ -33,7 +40,9 @@
 
   body {
     @apply bg-surface-page text-ink antialiased;
-    /* 统计工具的排印基础：数字等宽对齐 */
+    font-size: 16px;
+    line-height: 1.6;
+    /* 统计读数对齐：等宽数字 */
     font-variant-numeric: tabular-nums;
     text-rendering: optimizeLegibility;
   }
@@ -43,7 +52,8 @@
   }
 
   :focus-visible {
-    @apply outline-none ring-2 ring-primary/50 ring-offset-1 ring-offset-surface-page;
+    outline: 3px solid #0e7490;
+    outline-offset: 2px;
   }
 
   /* 细滚动条：不干扰数据密度 */
@@ -68,29 +78,21 @@
 }
 
 @layer utilities {
-  /* 页面底纹：极淡冷色网格，给数据工作台以「坐标纸」质感 */
+  /* 页面底纹：临床记录纸上的淡坐标格 */
   .bg-grid-page {
     background-image:
-      linear-gradient(rgba(59, 91, 219, 0.035) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(59, 91, 219, 0.035) 1px, transparent 1px);
+      linear-gradient(rgba(14, 116, 144, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(14, 116, 144, 0.045) 1px, transparent 1px);
     background-size: 28px 28px;
-  }
-
-  /* 深色头部的质感叠加 */
-  .bg-header-depth {
-    background-image:
-      radial-gradient(ellipse 80% 60% at 20% -10%, rgba(59, 91, 219, 0.5), transparent),
-      radial-gradient(ellipse 60% 50% at 90% 120%, rgba(34, 184, 207, 0.28), transparent),
-      linear-gradient(135deg, #1e2a5a 0%, #16204a 55%, #131c3d 100%);
   }
 
   /* 进度/加载 shimmer */
   .shimmer-bar {
     background: linear-gradient(
       90deg,
-      rgba(59, 91, 219, 0.15) 25%,
-      rgba(59, 91, 219, 0.55) 50%,
-      rgba(59, 91, 219, 0.15) 75%
+      rgba(14, 116, 144, 0.12) 25%,
+      rgba(14, 116, 144, 0.45) 50%,
+      rgba(14, 116, 144, 0.12) 75%
     );
     background-size: 200% 100%;
     @apply animate-shimmer;
@@ -101,5 +103,16 @@
     font-family: theme("fontFamily.display");
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.01em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

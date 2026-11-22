@@ -53,6 +53,17 @@ def test_health_exempt(tmp_path, monkeypatch) -> None:
     assert client.get("/health").status_code == 200
 
 
+def test_query_param_token_for_direct_links(tmp_path, monkeypatch) -> None:
+    """P1(审查)：图片/下载直链无法携带 Authorization 头——?token= 与 WS 同口径放行。"""
+    client = _secured_app(tmp_path, monkeypatch, token="s3cret")
+
+    # 正确 ?token=：不再是 401（/data 静态目录，缺文件为 404）
+    ok = client.get("/data/whatever.png?token=s3cret")
+    assert ok.status_code != 401
+    # 错误 ?token=：仍拒绝
+    assert client.get("/data/whatever.png?token=wrong").status_code == 401
+
+
 def test_ws_token_required(tmp_path, monkeypatch) -> None:
     """B4: WS 无 token → close(4401)；正确 token 正常收发。"""
     client = _secured_app(tmp_path, monkeypatch, token="s3cret")
@@ -76,9 +87,14 @@ def test_ws_token_required(tmp_path, monkeypatch) -> None:
         assert frame["type"] == "resumed"
 
 
-def test_spa_and_static_protected(tmp_path, monkeypatch) -> None:
-    """B5: SPA fallback 与静态 /data 同样受保护。"""
+def test_spa_shell_public_but_data_protected(tmp_path, monkeypatch) -> None:
+    """B5: 静态外壳（SPA 入口/构建产物）放行，业务数据（/data、/export…）仍受保护。
+
+    外壳只有 index.html 与打包后的 JS/CSS，不含任何会话数据；若一并要求令牌，
+    浏览器无法加载登录页与脚本（prod 单端口 + 鉴权会整页 401 白屏，无入口可登录）。
+    """
     client = _secured_app(tmp_path, monkeypatch)
 
-    assert client.get("/").status_code == 401
     assert client.get("/data/some/file.csv").status_code == 401
+    assert client.get("/sessions").status_code == 401
+    assert client.get("/").status_code != 401

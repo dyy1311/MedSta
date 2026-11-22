@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import PlotSuggestCard from "./chat/PlotSuggestCard";
 import {
   FakeWebSocket,
   PLAN_EVENT,
@@ -135,6 +136,9 @@ describe("会话流交互", () => {
       });
     });
     expect(await screen.findByText("出图前确认")).toBeInTheDocument();
+    // 终审修复：等配置期输入框必须只读——否则用户发消息会被 SESSION_BUSY 拒绝，
+    // 而 error 帧会清掉配置卡，会话卡在「无卡可确认、输入又被拒」的死角。
+    expect(composer).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /按此配置执行/ }));
     expect(socket().sent.at(-1)).toMatchObject({
@@ -266,6 +270,21 @@ describe("会话流交互", () => {
     });
   });
 
+  it("补绘图按钮连点只提交一次", () => {
+    const onPlotLater = vi.fn();
+    render(
+      <PlotSuggestCard
+        steps={[{ step_index: 0, title: "分布统计", charts: ["histogram", "boxplot"] }]}
+        submitting={false}
+        onPlotLater={onPlotLater}
+      />
+    );
+    const button = screen.getByRole("button", { name: /绘图/ });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(onPlotLater).toHaveBeenCalledTimes(1);
+  });
+
   it("审阅提出修正 → 发送 revise 并回到讨论", async () => {
     const { container } = render(<App />);
     await openSessionWithData(container);
@@ -354,9 +373,10 @@ describe("会话流交互", () => {
       ([, init]) => (init as RequestInit | undefined)?.method === "PATCH"
     );
     expect(patchCall).toBeTruthy();
+    // 单列修改也走批量端点：带 source，服务端据此在会话区广播「列类型已更新」
     expect(JSON.parse(String((patchCall?.[1] as RequestInit).body))).toEqual({
-      column: "value",
-      type: "ordinal",
+      types: { value: "ordinal" },
+      source: "manual",
     });
     expect(await within(workspaceSection).findByDisplayValue("数值-等级型")).toBeInTheDocument();
   });
@@ -380,7 +400,7 @@ describe("会话流交互", () => {
       "href",
       "/export/s1/0?format=xlsx"
     );
-    expect(within(workspaceSection).getByText("执行产出（1 图）")).toBeInTheDocument();
+    expect(within(workspaceSection).getByText("图表交付（1）")).toBeInTheDocument();
     expect(within(workspaceSection).getByRole("img")).toHaveAttribute(
       "src",
       "/data/s1/d1/artifacts/step_0_describe_histogram.png"

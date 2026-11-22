@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ImagePlus, Play } from "lucide-react";
-import type { PlotSuggestStep } from "../types";
+import type { PlotStyle, PlotSuggestStep } from "../types";
+import PlotStyleFields from "../components/PlotStyleFields";
 
 interface Props {
   steps: PlotSuggestStep[];
   submitting: boolean;
-  onPlotLater: (stepIndex: number, chartType: string) => void;
+  onPlotLater: (stepIndex: number, chartType: string, style?: PlotStyle) => void;
 }
 
 const CHART_LABELS: Record<string, string> = {
@@ -26,6 +27,17 @@ export default function PlotSuggestCard({ steps, submitting, onPlotLater }: Prop
   const [choices, setChoices] = useState<Record<number, string>>(
     Object.fromEntries(steps.map((step) => [step.step_index, step.charts[0]]))
   );
+  const [styleByStep, setStyleByStep] = useState<Record<number, PlotStyle>>({});
+  // 父组件清卡要等下一次渲染；同一次连点必须在这里挡住，否则会发出多帧 plot_later
+  const sent = useRef(false);
+  const [locked, setLocked] = useState(false);
+  const busy = submitting || locked;
+  const draw = (stepIndex: number) => {
+    if (busy || sent.current) return;
+    sent.current = true;
+    setLocked(true);
+    onPlotLater(stepIndex, choices[stepIndex], styleByStep[stepIndex]);
+  };
 
   return (
     <div className="animate-fade-in-up rounded-2xl border border-primary-cyan/30 bg-surface-card p-4 shadow-card">
@@ -39,7 +51,7 @@ export default function PlotSuggestCard({ steps, submitting, onPlotLater }: Prop
       <div className="space-y-2">
         {steps.map((step) => (
           <div key={step.step_index} className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-page px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{step.title}</span>
+            <span className="min-w-0 flex-1 break-words text-sm font-medium text-ink">{step.title}</span>
             <select
               value={choices[step.step_index]}
               onChange={(event) =>
@@ -54,13 +66,26 @@ export default function PlotSuggestCard({ steps, submitting, onPlotLater }: Prop
               ))}
             </select>
             <button
-              onClick={() => onPlotLater(step.step_index, choices[step.step_index])}
-              disabled={submitting}
+              onClick={() => draw(step.step_index)}
+              disabled={busy}
               className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-white transition-all hover:bg-primary-dark disabled:cursor-wait disabled:opacity-60"
             >
               <Play className="h-3 w-3" />
               绘图
             </button>
+            <details className="w-full min-w-0">
+              <summary className="cursor-pointer break-words text-[11px] text-ink-muted">
+                图标题、坐标轴与组名（可选）
+              </summary>
+              <div className="mt-2">
+                <PlotStyleFields
+                  value={styleByStep[step.step_index] ?? {}}
+                  onChange={(next) =>
+                    setStyleByStep((prev) => ({ ...prev, [step.step_index]: next }))
+                  }
+                />
+              </div>
+            </details>
           </div>
         ))}
       </div>

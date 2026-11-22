@@ -119,6 +119,55 @@ def test_chi_square_requires_two_categorical_columns() -> None:
     assert sum(issue.code == "MISSING_PARAM" for issue in issues) == 2
 
 
+def test_chi_square_params_only_without_targets_is_exempt() -> None:
+    """批次11 生产加固：row_column/col_column 完整指定时空目标可豁免。
+
+    此前与后段「两列来源：target_columns 或 params」特例自相矛盾——
+    params-only 在「至少一个目标列」处被先拦。
+    """
+    step = _step("chi_square", [], row_column="group", col_column="outcome")
+
+    issues = validate_step(step, _df())
+
+    assert [issue for issue in issues if "至少需要" in issue.message] == []
+
+
+def test_dunnett_control_group_is_required_before_execution() -> None:
+    """Dunnett 缺对照组在计划期拒绝，而不是执行时才 ValueError。"""
+    step = _step("anova", ["value"], group_column="group", correction="dunnett")
+
+    issues = validate_step(step, _df())
+
+    assert any(
+        issue.code == "MISSING_PARAM" and "control_group" in issue.message for issue in issues
+    )
+
+
+def test_dunnett_unknown_control_group_is_rejected() -> None:
+    """对照组名必须出现在分组列里。"""
+    step = _step(
+        "anova", ["value"], group_column="group", correction="dunnett", control_group="Z"
+    )
+
+    issues = validate_step(step, _df())
+
+    assert any(issue.code == "INVALID_PARAM" and "Z" in issue.message for issue in issues)
+
+
+def test_logrank_and_cox_require_their_columns_before_execution() -> None:
+    """log-rank 缺分组、Cox 缺协变量都在计划期拦住。"""
+    logrank = _step("survival_analysis", [], time_col="value", event_col="outcome")
+    logrank = logrank.model_copy(update={"params": {**logrank.params, "method": "logrank"}})
+    cox = _step("survival_analysis", [], time_col="value", event_col="outcome")
+    cox = cox.model_copy(update={"params": {**cox.params, "method": "cox"}})
+
+    logrank_issues = validate_step(logrank, _df())
+    cox_issues = validate_step(cox, _df())
+
+    assert any("group_col" in issue.message for issue in logrank_issues)
+    assert any("covariates" in issue.message for issue in cox_issues)
+
+
 def test_invalid_chart_for_method_is_hard_error() -> None:
     """B12: 方法不支持的图表类型在计划期被拒绝。"""
     step = _step("correlation", ["value", "grade"], chart="boxplot")

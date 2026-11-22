@@ -97,3 +97,36 @@ def test_imputed_csv_names_include_step_index(tmp_path) -> None:
     assert path1.endswith("imputed_step_1.csv")
     assert (tmp_path / "imputed_step_0.csv").is_file()
     assert (tmp_path / "imputed_step_1.csv").is_file()
+
+
+# ---- 审查修复批（P1）：McNemar 单元格含义按列联表真实水平生成 ----
+
+
+def test_mcnemar_cell_meanings_follow_actual_levels() -> None:
+    """P1: 中文编码（「阳」U+9633 排序先于「阴」U+9634）下，
+    crosstab 首行是「阳」——a=「两法均阳性」的硬编码文案会贴在两法均「阴」的格子上。
+    """
+    from medsta.agents.discussion import PlanStep
+    from medsta.stats.inference import mcnemar_test
+
+    df = pd.DataFrame(
+        {
+            "甲法": ["阳", "阳", "阳", "阴"],
+            "乙法": ["阳", "阳", "阴", "阴"],
+        }
+    )
+    step = PlanStep(
+        title="配对四格表", method="mcnemar_test",
+        target_columns=["甲法", "乙法"], chart_type="none",
+        params={"row_column": "甲法", "col_column": "乙法"},
+        rationale="测试依据：配对二分类",
+    )
+
+    result = mcnemar_test(df, step, step.params)
+    meanings = {row["cell"]: row["meaning"] for row in result["table"]["rows"]}
+
+    # 排序后 index[0]=「阳」、index[1]=「阴」→ a 单元格是两法均「阴」
+    assert "阴" in meanings["a"] and "均" in meanings["a"]
+    assert "阳" in meanings["d"] and "均" in meanings["d"]
+    # 对角线（一致格）口径不受单元格语义影响
+    assert result["agreement_rate"] == pytest.approx(3 / 4)

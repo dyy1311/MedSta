@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   artifactUrl,
+  cleanupDuplicateSessions,
   connectSession,
   createSession,
+  deleteSession,
   fetchCapabilities,
   updateColumnType,
   uploadData,
+  withToken,
 } from "./client";
 import type { WsEvent } from "../types";
 import {
@@ -129,6 +132,60 @@ describe("client REST 契约", () => {
   it("artifactUrl 指向 /data 静态目录", () => {
     expect(artifactUrl("s1", "chart.png")).toBe("/data/s1/artifacts/chart.png");
   });
+
+  it("createSession 失败时抛错（不再产生 undefined 会话 Tab）", async () => {
+    mockFetch([
+      {
+        path: "/sessions",
+        method: "POST",
+        respond: () => jsonResponse({ detail: "未登录或令牌已失效" }, 401),
+      },
+    ]);
+
+    await expect(createSession()).rejects.toThrow(/未登录或令牌已失效/);
+  });
+
+  it("withToken 为直链追加登录令牌（已有查询串时用 &）", () => {
+    localStorage.setItem("medsta_token", "tok en");
+    expect(withToken("/data/s1/a.png")).toBe("/data/s1/a.png?token=tok%20en");
+    expect(withToken("/export/s1/0?format=pdf")).toBe("/export/s1/0?format=pdf&token=tok%20en");
+    localStorage.removeItem("medsta_token");
+    expect(withToken("/data/s1/a.png")).toBe("/data/s1/a.png");
+  });
+
+  it("artifactUrl 带令牌（多用户模式下图表图片可加载）", () => {
+    localStorage.setItem("medsta_token", "t1");
+    expect(artifactUrl("s1", "chart.png")).toBe("/data/s1/artifacts/chart.png?token=t1");
+    localStorage.removeItem("medsta_token");
+  });
+
+  it("deleteSession 以 DELETE 提交，失败时透出后端 detail（批次12）", async () => {
+    mockFetch([
+      {
+        path: "/sessions/s9",
+        method: "DELETE",
+        respond: () => jsonResponse({ detail: "会话不存在" }, 404),
+      },
+    ]);
+
+    await expect(deleteSession("s9")).rejects.toThrow("会话不存在");
+  });
+
+  it("cleanupDuplicateSessions 以 POST 提交并返回清理结果（批次13）", async () => {
+    mockFetch([
+      {
+        path: "/sessions/cleanup_duplicates",
+        method: "POST",
+        respond: () => jsonResponse({ deleted: ["s1"], kept: ["s2"], skipped: [] }),
+      },
+    ]);
+
+    await expect(cleanupDuplicateSessions()).resolves.toEqual({
+      deleted: ["s1"],
+      kept: ["s2"],
+      skipped: [],
+    });
+  });
 });
 
 describe("client WebSocket 契约", () => {
@@ -178,6 +235,18 @@ describe("client WebSocket 契约", () => {
     expect(FakeWebSocket.latest().readyState).toBe(FakeWebSocket.CLOSED);
   });
 
+  it("审查修复：shouldResume 开启时首连即发 resume（last_seq 缺省 0，刷新可回放历史）", async () => {
+    installFakeWebSocket();
+    connectSession("s1", () => undefined, undefined, {
+      getLastSeq: () => null,
+      shouldResume: () => true,
+    });
+    await Promise.resolve();
+
+    const resume = FakeWebSocket.latest().sent.find((event) => event.type === "resume");
+    expect(resume).toEqual({ type: "resume", last_seq: 0 });
+  });
+
   it("035: 非手动断线自动重连并携带 resume+last_seq，状态回调驱动徽标", async () => {
     vi.useFakeTimers();
     installFakeWebSocket();
@@ -207,6 +276,27 @@ describe("client WebSocket 契约", () => {
     // 事件帧透传（seq 由 App 层记录，client 只转发）
     reconnected.emit({ type: "plan", seq: 8 });
     connection.close(); // 手动关闭后不再重连
+    vi.useRealTimers();
+  });
+
+  it("4401/4403 令牌失效：停止重连并回调 onAuthError（后端重启后令牌全失效）", async () => {
+    vi.useFakeTimers();
+    installFakeWebSocket();
+    const authErrors: number[] = [];
+    const statuses: string[] = [];
+    connectSession("s1", () => undefined, undefined, {
+      onStatus: (status) => statuses.push(status),
+      onAuthError: () => authErrors.push(1),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    FakeWebSocket.latest().onclose?.({ code: 4403 });
+    expect(authErrors).toHaveLength(1);
+
+    // 不再排重连定时器：推进 30s 也不产生新连接
+    const count = FakeWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(FakeWebSocket.instances.length).toBe(count);
     vi.useRealTimers();
   });
 

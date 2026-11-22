@@ -600,6 +600,16 @@ def mcnemar_test(df: pd.DataFrame, step: Any, params: dict) -> dict:
 
     total = a + b + c + d
     agreement_rate = (a + d) / total if total else 0.0
+    # 单元格含义按列联表真实水平生成（P1 修复）：crosstab 按字典序排水平，
+    # 硬编码「阳/阴」文案在中文编码（阳 U+9633 < 阴 U+9634）下会互换贴错格子
+    row_hi, row_lo = str(table.index[1]), str(table.index[0])
+    col_hi, col_lo = str(table.columns[1]), str(table.columns[0])
+    if row_hi == col_hi:
+        meaning_a = f"两法均为「{row_hi}」（一致）"
+        meaning_d = f"两法均为「{row_lo}」（一致）"
+    else:
+        meaning_a = f"「{row_column}」=「{row_hi}」且「{col_column}」=「{col_hi}」（一致）"
+        meaning_d = f"「{row_column}」=「{row_lo}」且「{col_column}」=「{col_lo}」（一致）"
     result: dict[str, Any] = {
         "row_column": row_column,
         "col_column": col_column,
@@ -620,10 +630,12 @@ def mcnemar_test(df: pd.DataFrame, step: Any, params: dict) -> dict:
         "table": {
             "columns": ["cell", "count", "meaning"],
             "rows": [
-                {"cell": "a", "count": a, "meaning": "两法均阳性（一致）"},
-                {"cell": "b", "count": b, "meaning": "本法阳性、对照法阴性（不一致）"},
-                {"cell": "c", "count": c, "meaning": "本法阴性、对照法阳性（不一致）"},
-                {"cell": "d", "count": d, "meaning": "两法均阴性（一致）"},
+                {"cell": "a", "count": a, "meaning": meaning_a},
+                {"cell": "b", "count": b,
+                 "meaning": f"「{row_column}」=「{row_hi}」且「{col_column}」=「{col_lo}」（不一致）"},
+                {"cell": "c", "count": c,
+                 "meaning": f"「{row_column}」=「{row_lo}」且「{col_column}」=「{col_hi}」（不一致）"},
+                {"cell": "d", "count": d, "meaning": meaning_d},
             ],
         },
         "method_note": METHOD_NOTES["mcnemar_test"],

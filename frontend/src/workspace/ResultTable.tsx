@@ -83,10 +83,11 @@ export default function ResultTable({
   result,
   compact = false,
 }: {
-  result: Record<string, unknown>;
+  /** 缺省容忍：历史报告/异常步骤可能没有 result 字段，不能因此整块崩掉 */
+  result?: Record<string, unknown>;
   compact?: boolean;
 }) {
-  const sections = useMemo(() => resultToSections(result), [result]);
+  const sections = useMemo(() => resultToSections(result ?? {}), [result]);
   if (sections.length === 0) return null;
 
   return (

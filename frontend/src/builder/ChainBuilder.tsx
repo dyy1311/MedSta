@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, FlaskConical, ListPlus, Play, Trash2, Upload } from "lucide-react";
-import { authHeaders } from "../api/client";
+import { ArrowDown, ArrowUp, FlaskConical, ListPlus, Pencil, Play, Trash2, Upload } from "lucide-react";
+import { authHeaders, withToken } from "../api/client";
+import { COLUMN_TYPE_LABELS } from "../types";
+import type { PlotStyle } from "../types";
+import PlotStyleFields from "../components/PlotStyleFields";
 
 export interface ChainStep {
   method: string;
@@ -8,6 +11,9 @@ export interface ChainStep {
   target_columns: string[];
   chart_type: string;
   params: Record<string, unknown>;
+  /** 本地标记：来源（ai/rule），发送给后端前会剥离 */
+  source?: "ai" | "rule";
+  _recipeStep?: number;
 }
 
 interface ToolParamSpec {
@@ -30,6 +36,8 @@ interface ToolSpecView {
   charts: string[];
   /** 工具可接受的目标列类型（037 置灰依据） */
   accepts?: string[];
+  /** 分组参数名（如 group_column）：类别列误选为目标列时提供「设为分组列」 */
+  group_param?: string | null;
 }
 
 interface TemplateView {
@@ -63,6 +71,12 @@ export default function ChainBuilder({
   const [templates, setTemplates] = useState<TemplateView[]>([]);
   const [tplName, setTplName] = useState("");
   const [notice, setNotice] = useState("");
+  // 推荐流程模板暂不引入：内置 recipes / AI 一键匹配入口先关掉
+  // const [recipes, setRecipes] = useState<BuiltinRecipe[]>([]);
+  // const [recipeBusy, setRecipeBusy] = useState<string | null>(null);
+  // const [recipeNote, setRecipeNote] = useState<string>("");
+  // 编辑态：非 null 时「加入工作链」变为「更新第 N 步」
+  const [editing, setEditing] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +92,11 @@ export default function ChainBuilder({
         if (!cancelled) setTemplates(payload.templates ?? []);
       })
       .catch(() => undefined);
+    // fetchBuiltinRecipes()
+    //   .then((items) => {
+    //     if (!cancelled) setRecipes(items);
+    //   })
+    //   .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -94,6 +113,24 @@ export default function ChainBuilder({
       ),
     [columns, columnTypes]
   );
+  /** 目标列里「当前工具不接受」的类型（提交前提示，而不是等执行期校验炸） */
+  const mismatchedTargets = useMemo(() => {
+    const accepts = tool?.accepts ?? [];
+    if (!accepts.length) return [];
+    return targets.filter((column) => {
+      const type = columnTypes[column];
+      return Boolean(type) && !accepts.includes(type);
+    });
+  }, [targets, tool, columnTypes]);
+
+  /** 把误放为目标列的类别列挪到分组参数（用户最常见的一步修正） */
+  const moveToGroupColumn = (column: string) => {
+    const groupParam = tool?.group_param;
+    if (!groupParam) return;
+    setTargets((prev) => prev.filter((item) => item !== column));
+    setDraft((prev) => ({ ...prev, [groupParam]: column }));
+  };
+
   const isInapplicable = (item: ToolSpecView): boolean => {
     if (!item.accepts || item.accepts.length === 0 || dataTypes.size === 0) return false;
     return !item.accepts.some((type) => dataTypes.has(type));
@@ -123,18 +160,49 @@ export default function ChainBuilder({
 
   const addStep = () => {
     if (!tool) return;
-    setChain((prev) => [
-      ...prev,
-      {
-        method: tool.name,
-        title: tool.title,
-        target_columns: [...targets],
-        chart_type: chart,
-        params: { ...draft },
-      },
-    ]);
+    const params = { ...draft };
+    for (const key of [
+      "_plot_title",
+      "_plot_xlabel",
+      "_plot_ylabel",
+      "_plot_xticks",
+      "_plot_yticks",
+      "_plot_groups",
+      "_plot_group_order",
+    ]) {
+      if (!String(params[key] ?? "").trim()) delete params[key];
+    }
+    const step: ChainStep = {
+      method: tool.name,
+      title: tool.title,
+      target_columns: [...targets],
+      chart_type: chart,
+      params,
+    };
+    if (editing !== null) {
+      // 编辑态：就地替换该步（保留其位置），避免「删了重加」把顺序打乱
+      setChain((prev) => prev.map((item, index) => (index === editing ? step : item)));
+      setEditing(null);
+    } else {
+      setChain((prev) => [...prev, step]);
+    }
     resetDraft(tool);
   };
+
+  /** 回填某步到左侧表单（参数/目标列可改），提交时更新该步 */
+  const startEdit = (index: number) => {
+    const step = chain[index];
+    if (!step) return;
+    setSelected(step.method);
+    setTargets([...step.target_columns]);
+    setChart(step.chart_type);
+    setDraft({ ...step.params });
+    setEditing(index);
+  };
+
+  /** AI 一键匹配：暂不引入，保留实现备查
+  const loadRecipe = async (recipeId: string) => { ... };
+  */
 
   const move = (index: number, delta: number) => {
     setChain((prev) => {
@@ -154,8 +222,11 @@ export default function ChainBuilder({
     if (busy || chain.length === 0) return;
     onRun(
       chain.map((step, index) => ({
-        ...step,
+        method: step.method,
         title: step.title || `步骤 ${index + 1}`,
+        target_columns: [...step.target_columns],
+        chart_type: step.chart_type,
+        params: { ...step.params },
       })),
     );
   };
@@ -175,7 +246,8 @@ export default function ChainBuilder({
   };
 
   const refreshTemplates = () => {
-    fetch("/templates")
+    // 多用户模式必须带令牌：此前漏 authHeaders 会让刷新后的列表变空（401 静默失败）
+    fetch("/templates", { headers: authHeaders() })
       .then((resp) => (resp.ok ? resp.json() : Promise.reject(new Error(String(resp.status)))))
       .then((payload: { templates: TemplateView[] }) => setTemplates(payload.templates ?? []))
       .catch(() => undefined);
@@ -250,7 +322,7 @@ export default function ChainBuilder({
       }
       const resp = await fetch("/templates/import", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ name: payload.name, steps: payload.steps }),
       });
       if (resp.status === 409) {
@@ -270,7 +342,7 @@ export default function ChainBuilder({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto break-words p-4">
       <div className="flex items-center gap-2">
         <FlaskConical className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold text-primary-dark">工具装配</span>
@@ -366,9 +438,34 @@ export default function ChainBuilder({
                       onChange={() => toggleTarget(column)}
                     />
                     {column}
+                    {columnTypes[column] && (
+                      <span className="text-[10px] text-ink-faint">
+                        {COLUMN_TYPE_LABELS[columnTypes[column]] ?? columnTypes[column]}
+                      </span>
+                    )}
                   </label>
                 ))}
               </div>
+              {mismatchedTargets.length > 0 && (
+                <div
+                  data-testid="target-type-warning"
+                  className="mt-2 rounded-lg border border-warn/30 bg-warn/5 p-2 text-[11px] leading-relaxed text-warn"
+                >
+                  <p>
+                    {mismatchedTargets.join("、")} 的类型不在「{tool.title}」可接受范围（
+                    {(tool.accepts ?? []).join(" / ")}）——这类列通常作为分组变量。
+                  </p>
+                  {tool.group_param && (
+                    <button
+                      type="button"
+                      onClick={() => moveToGroupColumn(mismatchedTargets[0])}
+                      className="mt-1 cursor-pointer rounded-md border border-warn/40 bg-white px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
+                    >
+                      把「{mismatchedTargets[0]}」设为分组列（{tool.group_param}）
+                    </button>
+                  )}
+                </div>
+              )}
             </fieldset>
 
             {tool.params.map((param) => (
@@ -477,12 +574,55 @@ export default function ChainBuilder({
                 className="ml-auto flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-xs text-white disabled:opacity-40"
               >
                 <ListPlus className="h-3.5 w-3.5" />
-                添加到工作链
+                {editing === null ? "添加到工作链" : `更新第 ${editing + 1} 步`}
               </button>
             </div>
+            {chart !== "none" && (
+              <details className="mt-2">
+                <summary className="cursor-pointer break-words text-[11px] text-ink-muted">
+                  图标题、坐标轴与组名（可选）
+                </summary>
+                <div className="mt-2">
+                  <PlotStyleFields
+                    value={{
+                      title: String(draft._plot_title ?? ""),
+                      xlabel: String(draft._plot_xlabel ?? ""),
+                      ylabel: String(draft._plot_ylabel ?? ""),
+                      xticks: String(draft._plot_xticks ?? ""),
+                      yticks: String(draft._plot_yticks ?? ""),
+                      groups: String(draft._plot_groups ?? ""),
+                      group_order: String(draft._plot_group_order ?? ""),
+                    }}
+                    onChange={(next: PlotStyle) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        _plot_title: next.title ?? "",
+                        _plot_xlabel: next.xlabel ?? "",
+                        _plot_ylabel: next.ylabel ?? "",
+                        _plot_xticks: next.xticks ?? "",
+                        _plot_yticks: next.yticks ?? "",
+                        _plot_groups: next.groups ?? "",
+                        _plot_group_order: next.group_order ?? "",
+                      }))
+                    }
+                  />
+                </div>
+              </details>
+            )}
+            {editing !== null && (
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                className="ml-1 cursor-pointer rounded-lg border border-ink/20 px-2 py-1 text-xs text-ink-muted"
+              >
+                取消编辑
+              </button>
+            )}
           </div>
         )}
       </section>
+
+      {/* 推荐流程（内置工具链模板）暂不引入：入口与 AI 匹配先关掉，后端 /templates/builtin 仍保留。 */}
 
       <section className="rounded-2xl bg-surface-card p-3 shadow-card">
         <div className="mb-2 flex items-center gap-2">
@@ -514,7 +654,21 @@ export default function ChainBuilder({
                 <span className="text-ink-muted">
                   {step.target_columns.join("、") || "—"} · {step.chart_type === "none" ? "不出图" : step.chart_type}
                 </span>
+                {step.source && (
+                  <span className="rounded bg-primary/8 px-1 py-0.5 text-[10px] text-primary">
+                    {step.source === "ai" ? "AI 匹配" : "规则匹配"}
+                  </span>
+                )}
                 <span className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label={`编辑 ${step.title}`}
+                    data-testid={`chain-edit-${index}`}
+                    onClick={() => startEdit(index)}
+                    className="p-1 text-ink-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
                   <button
                     type="button"
                     aria-label={`上移 ${step.title}`}
@@ -616,7 +770,7 @@ export default function ChainBuilder({
                     载入
                   </button>
                   <a
-                    href={`/templates/${encodeURIComponent(template.name)}/export`}
+                    href={withToken(`/templates/${encodeURIComponent(template.name)}/export`)}
                     aria-label={`导出 ${template.name}`}
                     className="cursor-pointer rounded-md border border-primary/40 px-2 py-0.5 text-primary transition-colors hover:bg-primary/5"
                   >

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +29,16 @@ _API_PREFIXES = (
     "/report",
     "/docs", "/openapi.json", "/redoc",
 )
+
+# 鉴权中间件放行的「静态外壳」路径：SPA 入口与构建产物自身不含业务数据，
+# 若也要求令牌，浏览器无法加载登录页/脚本（prod 单端口 + 鉴权会整页 401 白屏）。
+_PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico", "/health"}
+_PUBLIC_PREFIXES = ("/assets/",)
+
+
+def _is_public_shell(path: str) -> bool:
+    """静态外壳路径判定（仅 SPA 入口与前端构建产物）。"""
+    return path in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES)
 
 
 def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
@@ -87,10 +98,18 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     @app.middleware("http")
     async def auth_guard(request: Request, call_next):
         if app.state.medsta_users:
-            # 044 多用户模式：/auth/login 豁免；其余要求有效令牌并注入身份
-            if request.url.path == "/auth/login" or request.url.path == "/health":
+            # 044 多用户模式：/auth/login 与静态外壳豁免；其余要求有效令牌并注入身份
+            if (
+                request.url.path == "/auth/login"
+                or _is_public_shell(request.url.path)
+            ):
                 return await call_next(request)
-            provided = request.headers.get("X-Auth-Token") or ""
+            provided = (
+                request.headers.get("X-Auth-Token")
+                # 直链（图片/下载）无法携带请求头：与 WS 同口径支持 ?token=
+                or request.query_params.get("token")
+                or ""
+            )
             if not provided:
                 bearer = request.headers.get("Authorization") or ""
                 if bearer.startswith("Bearer "):
@@ -104,7 +123,14 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
             request.state.username = username
             # 会话归属隔离：/sessions|export|report|data/{sid}** 非 owner 一律 404
             parts = request.url.path.strip("/").split("/")
-            if len(parts) >= 2 and parts[0] in ("sessions", "export", "report", "data"):
+            # 批次13 集合级动作（作用于本人全部会话，非单会话资源）：
+            # 已通过令牌校验，无会话归属可查，跳过 404 判定
+            collection_actions = {("sessions", "cleanup_duplicates")}
+            if (
+                len(parts) >= 2
+                and parts[0] in ("sessions", "export", "report", "data")
+                and (parts[0], parts[1]) not in collection_actions
+            ):
                 session = manager.get(parts[1])
                 if session is None or session.owner != username:
                     return JSONResponse(status_code=404, content={"detail": "会话不存在"})
@@ -112,12 +138,17 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
         # 038 单令牌模式（USERS 未配置时保持原行为）
         token: str | None = getattr(app.state, "auth_token", None)
         if token:
-            provided = request.headers.get("X-Auth-Token") or ""
+            provided = (
+                request.headers.get("X-Auth-Token")
+                # 直链（图片/下载）无法携带请求头：与 WS 同口径支持 ?token=
+                or request.query_params.get("token")
+                or ""
+            )
             if not provided:
                 bearer = request.headers.get("Authorization") or ""
                 if bearer.startswith("Bearer "):
                     provided = bearer[len("Bearer "):].strip()
-            if provided != token and request.url.path != "/health":
+            if provided != token and not _is_public_shell(request.url.path):
                 return JSONResponse(
                     status_code=401,
                     content={
@@ -177,4 +208,20 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+# 模块级 app 的类型声明：实际由下方 __getattr__ 惰性构建（PEP 562）
+app: FastAPI
+
+
+def __getattr__(name: str) -> Any:
+    """模块级 app 惰性构建（审查修复 P2）。
+
+    导入 medsta.app（如测试取 create_app）不再触发真实数据根的
+    restore_all / 目录创建 / 网关构建副作用；uvicorn 的
+    "medsta.app:app" 字符串目标在首次取属性时才构建，并 memoize
+    到模块字典供后续访问。
+    """
+    if name == "app":
+        instance = create_app()
+        globals()["app"] = instance  # memoize：后续访问不再走 __getattr__
+        return instance
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -100,6 +100,40 @@ def test_no_deprecated_phrasing(phrase: str) -> None:
         assert phrase not in _read(path), f"{path.name} 仍含过期表述「{phrase}」"
 
 
+def test_appendix_b_states_match_session_status() -> None:
+    """B8(审查): 附录 B 状态表与 SessionStatus 枚举严格同源。
+
+    架构文档曾长期列出代码中不存在的 AWAITING_REVIEW（漂移检测不到），此断言封堵。
+    """
+    from medsta.session.manager import SessionStatus
+
+    section = _read(ARCH).split("## 附录 B", 1)[1]
+    states_part = section.split("状态（`SessionStatus`）", 1)[1]
+    listed = {match.lower() for match in re.findall(r"^\|\s*`([A-Za-z_]+)`\s*\|", states_part, re.M)}
+    actual = {status.value for status in SessionStatus}
+
+    assert listed == actual, {
+        "missing_in_doc": sorted(actual - listed),
+        "extra_in_doc": sorted(listed - actual),
+    }
+
+
+def test_appendix_b_covers_emitted_ws_events() -> None:
+    """B9(审查): 附录 B 事件表 ⊇ service/ws 实际下发的出站事件类型。"""
+    from medsta.session.service import USER_ACTION_EVENTS
+
+    emitted: set[str] = set()
+    for rel in ("backend/src/medsta/session/service.py", "backend/src/medsta/api/ws.py"):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        emitted.update(re.findall(r'"type":\s*"([a-z_]+)"', text))
+    inbound = USER_ACTION_EVENTS | {"workspace", "resume", "suggest_column_types"}
+    section = _read(ARCH).split("## 附录 B", 1)[1].split("状态（`SessionStatus`）", 1)[0]
+    listed = set(re.findall(r"`([a-z_]+)`", section))
+
+    missing = sorted(event for event in emitted - listed - inbound if not event.endswith("_user"))
+    assert missing == [], f"附录 B 缺事件：{missing}"
+
+
 def test_tools_md_matches_registry() -> None:
     """B7(033): tools.md 双向登记全部统计工具与作图类型，不得缺漏或含已注销工具。"""
     tools_md = REPO_ROOT / "docs" / "tools.md"

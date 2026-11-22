@@ -17,7 +17,7 @@ _FORMATS = ("docx", "pdf", "md")
 
 
 @router.get("/report/{session_id}")
-async def export_report(
+def export_report(
     session_id: str,
     request: Request,
     style: str = "academic",

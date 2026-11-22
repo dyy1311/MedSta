@@ -19,6 +19,8 @@ dependencies = [
     "python-docx>=1.1",
     "reportlab>=4.0",
     "openpyxl>=3.1",
+    # 旧版 Excel（.xls）解析引擎：openpyxl 只支持 .xlsx，缺它 .xls 上传必然失败
+    "xlrd>=2.0",
 ]
 
 [project.optional-dependencies]

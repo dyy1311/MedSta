@@ -14,7 +14,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from medsta.errors import ErrorCode
-from medsta.stats import descriptive, inference, methods, survival
+from medsta.stats import cleaning, descriptive, inference, methods, survival
 from medsta.stats import impute as impute_tool
 from medsta.stats.notes import METHOD_NOTES
 from medsta.stats.plotting import render_chart
@@ -60,6 +60,8 @@ class ToolSpec:
     task: str = ""  # sta_task：描述/关联/因果/预测/决策
     applicability: str = ""  # 适用条件（显式依据，进目录与模型上下文）
     slots: tuple[str, ...] = ()  # 语义槽位：group_col/value_col/agg…
+    # 目标列由参数承载时（如 regression/logistic 的 params.target），target_columns 可留空
+    target_param: str | None = None
 
     def param(self, name: str) -> ToolParam | None:
         return next((p for p in self.params if p.name == name), None)
@@ -69,9 +71,18 @@ _CATEGORY_DESCRIBE = "描述与质检"
 _CATEGORY_COMPARE = "组间比较"
 _CATEGORY_MODEL = "关联与预测"
 _CATEGORY_DESIGN = "研究设计"
+_CATEGORY_CLEAN = "数据清洗"
 
-# 设计期工具不处理数据列，允许 target_columns 为空
-_NO_TARGET_TOOLS = {"sample_size"}
+# 允许 target_columns 为空的工具：设计期工具不处理数据列；
+# 清洗工具 dedupe/filter_rows 的作用列在 params 内声明（045）；
+# missing_report/aggregate_table 作用于整表或由 params 指定分组/取值列
+_NO_TARGET_TOOLS = {
+    "sample_size",
+    "dedupe",
+    "filter_rows",
+    "missing_report",
+    "aggregate_table",
+}
 
 _REGISTRY: dict[str, ToolSpec] = {
     "describe": ToolSpec(
@@ -179,6 +190,116 @@ _REGISTRY: dict[str, ToolSpec] = {
         charts=(),
         handler=impute_tool.impute,
         accepts=("continuous",),
+    ),
+    "dedupe": ToolSpec(
+        name="dedupe",
+        title="重复行去重",
+        category=_CATEGORY_CLEAN,
+        description=(
+            "整行或按指定列去重（keep=first/last 保留首次/末次出现）；"
+            "有重复时产出可继续分析的清洗数据集"
+        ),
+        params=(
+            ToolParam(
+                "columns", "column_list", "判重依据列（可选，空=整行判重）", required=False
+            ),
+            ToolParam(
+                "keep", "choice", "重复保留策略",
+                choices=("first", "last"), default="first",
+            ),
+        ),
+        charts=(),
+        handler=cleaning.dedupe,
+        min_rows=1,
+    ),
+    "filter_rows": ToolSpec(
+        name="filter_rows",
+        title="按条件筛选行",
+        category=_CATEGORY_CLEAN,
+        description="conditions 多条件 AND 筛选子集，产出可继续分析的清洗数据集",
+        params=(
+            ToolParam(
+                "conditions", "string",
+                "筛选条件数组 [{column, op, value}]，"
+                "op ∈ eq/ne/gt/ge/lt/le/between/in/isna/notna（多条件 AND）",
+                required=True,
+            ),
+        ),
+        charts=(),
+        handler=cleaning.filter_rows,
+        min_rows=1,
+    ),
+    "standardize": ToolSpec(
+        name="standardize",
+        title="标准化",
+        category=_CATEGORY_CLEAN,
+        description="z-score（默认）或 min-max 标准化：列内变换、列名不变，产出清洗数据集",
+        params=(
+            ToolParam(
+                "method", "choice", "标准化方法",
+                choices=("zscore", "minmax"), default="zscore",
+            ),
+        ),
+        charts=(),
+        handler=cleaning.standardize,
+        accepts=("continuous",),
+        min_rows=2,
+    ),
+    "bin_column": ToolSpec(
+        name="bin_column",
+        title="连续变量分箱",
+        category=_CATEGORY_CLEAN,
+        description=(
+            "等频（默认）或等宽分箱为等级变量：新增 {col}_bin 列（整数箱号 1..k），"
+            "产出清洗数据集"
+        ),
+        params=(
+            ToolParam(
+                "method", "choice", "分箱方法",
+                choices=("quantile", "equal_width"), default="quantile",
+            ),
+            ToolParam("bins", "integer", "分箱数（默认 4，至少 2）", default=4),
+            ToolParam("output_column", "string", "输出列名（仅单列分箱时可用）", required=False),
+        ),
+        charts=(),
+        handler=cleaning.bin_column,
+        accepts=("continuous",),
+    ),
+    "outlier_report": ToolSpec(
+        name="outlier_report",
+        title="异常值识别",
+        category=_CATEGORY_CLEAN,
+        description=(
+            "逐列识别异常值：IQR 法（k 可调，默认 1.5）或 z-score 3σ 法；"
+            "仅报告不改动数据"
+        ),
+        params=(
+            ToolParam("method", "choice", "识别方法", choices=("iqr", "zscore"), default="iqr"),
+            ToolParam("k", "number", "IQR 法倍数（默认 1.5）", required=False),
+        ),
+        charts=(),
+        handler=cleaning.outlier_report,
+        accepts=("continuous",),
+        min_rows=4,
+    ),
+    "winsorize": ToolSpec(
+        name="winsorize",
+        title="异常值截尾",
+        category=_CATEGORY_CLEAN,
+        description=(
+            "把界外值截到边界（IQR 法默认 k=1.5，或百分位法默认 1%/99%），"
+            "产出清洗数据集"
+        ),
+        params=(
+            ToolParam("method", "choice", "截尾方法", choices=("iqr", "percentile"), default="iqr"),
+            ToolParam("k", "number", "IQR 法倍数（默认 1.5）", required=False),
+            ToolParam("lower_pct", "number", "百分位法下界（默认 1）", required=False),
+            ToolParam("upper_pct", "number", "百分位法上界（默认 99）", required=False),
+        ),
+        charts=(),
+        handler=cleaning.winsorize,
+        accepts=("continuous",),
+        min_rows=4,
     ),
     "normality_test": ToolSpec(
         name="normality_test",
@@ -365,6 +486,7 @@ _REGISTRY: dict[str, ToolSpec] = {
         charts=("survival_curve",),
         handler=survival.survival_analysis,
         accepts=("continuous",),
+        target_param="time_col",
     ),
     "sample_size": ToolSpec(
         name="sample_size",
@@ -428,6 +550,7 @@ _REGISTRY: dict[str, ToolSpec] = {
         charts=("residual_plot", "scatter"),
         handler=methods.regression,
         accepts=("continuous",),
+        target_param="target",
     ),
     "logistic_regression": ToolSpec(
         name="logistic_regression",
@@ -440,6 +563,7 @@ _REGISTRY: dict[str, ToolSpec] = {
         ),
         charts=("bar", "grouped_bar"),
         handler=methods.logistic_regression,
+        target_param="target",
     ),
     "timeseries_forecast": ToolSpec(
         name="timeseries_forecast",
@@ -498,8 +622,8 @@ _SLOT_META = {
     "anova": ("group_col", "value_col"),
     "chi_square": ("row_col", "col_col"),
     "correlation": ("value_col",),
-    "regression": ("value_col", "covariates"),
-    "logistic_regression": ("outcome_col", "covariates"),
+    "regression": ("target", "features"),
+    "logistic_regression": ("target", "features"),
     "timeseries_forecast": ("value_col",),
     "aggregate_table": ("group_col", "value_col", "agg"),
 }
@@ -513,6 +637,7 @@ for _name, (_task, _applic) in _TASK_META.items():
             accepts=_spec.accepts,
             task=_task, applicability=_applic,
             slots=tuple(s for s in _SLOT_META.get(_name, ()) if s),
+            target_param=_spec.target_param,
         )
 
 # 新增工具：方差齐性检验
@@ -560,6 +685,17 @@ HARD_ISSUE_CODES = {
     "INVALID_PARAM", "INSUFFICIENT_DATA", "COLUMN_TYPE_MISMATCH",
 }
 
+# 产出 _next_frame 的工具（037 链间管道）。重跑与补图必须先重放这些节点，
+# 否则下游会静默用回原始表。outlier_report 只出报告，不在此列。
+FRAME_METHODS = frozenset({
+    "impute",
+    "dedupe",
+    "filter_rows",
+    "standardize",
+    "bin_column",
+    "winsorize",
+})
+
 
 def get_tool(name: str) -> ToolSpec | None:
     return _REGISTRY.get(ALIASES.get(name, name))
@@ -581,6 +717,10 @@ def tool_catalog() -> list[dict]:
             "applicability": spec.applicability,
             "accepts": list(spec.accepts),
             "slots": list(spec.slots),
+            # 分组参数名（装配器据此提供「设为分组列」入口与前置提示）
+            "group_param": spec.group_param,
+            # 目标列由参数承载时（params.target / params.time_col），前端提示勾选位置
+            "target_param": spec.target_param,
             "params": [
                 {
                     "name": param.name,
@@ -603,6 +743,46 @@ def _choice_str(value: Any) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
     return str(value)
+
+
+def _conditional_required(spec: ToolSpec, params: dict, index: int | None) -> list[ToolIssue]:
+    """计划期补上「随取值才必填」的参数，避免拖到运行期才抛 ValueError。
+
+    宿主在执行前就能拒绝：Dunnett 缺对照组、log-rank 缺分组、Cox 缺协变量。
+    method=auto 由运行期按已填参数选择，这里不额外加必填。
+    """
+    issues: list[ToolIssue] = []
+
+    def add(code: ErrorCode, message: str, hint: str) -> None:
+        issues.append(ToolIssue(code=code.value, message=message, hint=hint, step_index=index))
+
+    if spec.name == "anova" and _choice_str(params.get("correction") or "snk") == "dunnett":
+        control = params.get("control_group")
+        if control is None or str(control).strip() == "":
+            add(
+                ErrorCode.MISSING_PARAM,
+                "Dunnett 事后比较必须指定 control_group（对照组组名）",
+                "在 params.control_group 填写数据里真实存在的对照组名称",
+            )
+    if spec.name == "survival_analysis":
+        method = _choice_str(params.get("method") or "auto")
+        if method == "logrank" and not str(params.get("group_col") or "").strip():
+            add(
+                ErrorCode.MISSING_PARAM,
+                "log-rank 检验必须指定 group_col（分组变量）",
+                "在 params.group_col 选择至少有 2 个水平的分组列",
+            )
+        if method == "cox":
+            covariates = params.get("covariates") or []
+            if isinstance(covariates, str):
+                covariates = [covariates] if covariates.strip() else []
+            if not covariates:
+                add(
+                    ErrorCode.MISSING_PARAM,
+                    "Cox 回归必须指定 covariates（至少 1 个协变量）",
+                    "在 params.covariates 填入数值协变量列",
+                )
+    return issues
 
 
 def _column_names(df_or_columns: Any) -> list[str]:
@@ -654,7 +834,11 @@ def validate_step(
         elif col_type == "ordinal" and spec.accepts and "continuous" in spec.accepts and "ordinal" not in spec.accepts:
             issues.append(ToolIssue(
                 code="ORDINAL_HINT",
-                message=f"列「{column}」是数值-等级型：参数检验前提不稳，将自动按非参数/稳健方法处理",
+                message=(
+                    f"列「{column}」是数值-等级型：参数检验前提不稳，"
+                    "正态性不满足时策略链会降级非参数方法；"
+                    "等级资料更稳妥的做法是显式指定非参数检验"
+                ),
                 hint="次优方案：Mann-Whitney / Kruskal-Wallis；或改用卡方与频数描述",
                 step_index=index,
             ))
@@ -663,11 +847,20 @@ def validate_step(
             and col_type in ("categorical", "ordinal", "continuous")
             and col_type not in spec.accepts
         ):
-            suggestion = {
-                "categorical": "类别型可用 chi_square 或频数描述",
-                "ordinal": "等级型建议非参数方法（Mann-Whitney / Kruskal-Wallis）",
-                "continuous": "连续型建议分箱后用卡方，或改用连续型方法",
-            }.get(col_type, "")
+            if col_type == "categorical" and spec.group_param:
+                # 类别列被放进 target_columns 是最常见的误用：它们通常是分组因子
+                # （「是否手术」分组比较指标），而非待分析的值变量
+                suggestion = (
+                    f"「{column}」更像分组变量：target_columns 只放数值列，"
+                    f"并在 params.{spec.group_param} 里选它（至少 2 组）；"
+                    "若本意是比较组间率/构成，请改用 chi_square"
+                )
+            else:
+                suggestion = {
+                    "categorical": "类别型可用 chi_square 或频数描述",
+                    "ordinal": "等级型建议非参数方法（Mann-Whitney / Kruskal-Wallis）",
+                    "continuous": "连续型建议分箱后用卡方，或改用连续型方法",
+                }.get(col_type, "")
             add(
                 ErrorCode.COLUMN_TYPE_MISMATCH,
                 f"列「{column}」是{col_type}型，不适用于 {spec.name}",
@@ -680,8 +873,27 @@ def validate_step(
                 f"步骤「{step.title}」引用了不存在的列：{column}",
                 f"数据现有列：{', '.join(columns[:12])}",
             )
-    if not step.target_columns and spec.name not in _NO_TARGET_TOOLS:
-        add(ErrorCode.INVALID_PARAM, f"步骤「{step.title}」至少需要一个目标列")
+    # chi_square/mcnemar 允许 params-only：row_column/col_column 完整指定时
+    # 与后段「两列来源：target_columns 或 params」特例自洽（批次11：消除先拦矛盾）
+    early_params = (
+        dict(step.params or {}) if spec.name in ("chi_square", "mcnemar_test") else {}
+    )
+    params_only = bool(early_params.get("row_column")) and bool(early_params.get("col_column"))
+    # 目标列也可以由参数承载（regression/logistic 的 params.target、生存的 params.time_col）：
+    # 这些工具的计算入口只读 params，强制 target_columns 会让「参数已填全」的方案被判非法
+    params_target = bool(spec.target_param and (step.params or {}).get(spec.target_param))
+    if (
+        not step.target_columns
+        and not params_only
+        and not params_target
+        and spec.name not in _NO_TARGET_TOOLS
+    ):
+        hint = (
+            f"该方法的分析目标在参数里选：params.{spec.target_param}"
+            if spec.target_param
+            else "勾选目标列，或检查该方法必填参数"
+        )
+        add(ErrorCode.INVALID_PARAM, f"步骤「{step.title}」至少需要一个目标列", hint)
 
     if step.chart_type != "none" and step.chart_type not in spec.charts:
         add(
@@ -731,6 +943,8 @@ def validate_step(
             except (TypeError, ValueError):
                 add(ErrorCode.INVALID_PARAM, f"参数 {param.name} 需为整数，收到 {value!r}")
 
+    issues.extend(_conditional_required(spec, params, index))
+
     hard_issues = [issue for issue in issues if issue.code in HARD_ISSUE_CODES]
     if hard_issues:
         return hard_issues  # 软提示（ORDINAL_HINT 等）继续走数据充分性检查
@@ -776,6 +990,16 @@ def _check_data(
                     f"分组列「{group_column}」只有 {group_count} 组，至少需要 2 组",
                     "换一个分组列，或先上传含多组的数据",
                 )
+            elif spec.name == "anova" and _choice_str(params.get("correction") or "snk") == "dunnett":
+                control = str(params.get("control_group") or "").strip()
+                if control:
+                    labels = [str(value) for value in pd.unique(df[group_column].dropna())]
+                    if control not in labels:
+                        add(
+                            ErrorCode.INVALID_PARAM,
+                            f"对照组「{control}」不在分组列「{group_column}」中",
+                            f"可选组：{', '.join(labels[:12])}",
+                        )
             elif spec.name == "group_compare" and group_count > 2:
                 # group_compare 只比较前两组；静默丢弃第三组会造成错误结论
                 add(

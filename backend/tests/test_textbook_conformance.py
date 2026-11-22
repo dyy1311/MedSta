@@ -259,6 +259,19 @@ def test_reference_range_log_normal_restores_scale() -> None:
     assert result["upper"] == pytest.approx(expected_upper, rel=1e-6)
 
 
+def test_forced_log_normal_rejects_non_positive_values() -> None:
+    """批次11 生产加固：强制 method=log_normal 时含非正值必须显式拒绝。
+
+    此前 np.log 产生 NaN 静默传播到 lower/upper，威胁「严格 JSON」出口契约。
+    auto 路径已有正性门，此处补齐强制路径。
+    """
+    from medsta.stats.descriptive import compute_reference_range
+
+    values = np.array([1.0, 2.0, 0.0, 4.0, 5.0, 6.0])
+    with pytest.raises(ValueError, match="全部为正"):
+        compute_reference_range(values, percentage=95, sides="two", method="log_normal")
+
+
 def test_reference_range_small_sample_warnings() -> None:
     """B11: 样本量不足时给出稳定性警示。"""
     from medsta.stats.descriptive import compute_reference_range

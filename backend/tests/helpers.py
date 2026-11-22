@@ -75,14 +75,23 @@ def upload_csv(
     return response.json()
 
 
-def collect_until(ws, types: Iterable[str], limit: int = 120) -> tuple[list[dict], dict]:
-    """读取 WS 帧直到出现目标类型；返回全部帧与命中帧。"""
+def collect_until(
+    ws, types: Iterable[str], limit: int = 120, *, stop_on_error: bool = True
+) -> tuple[list[dict], dict]:
+    """读取 WS 帧直到出现目标类型；返回全部帧与命中帧。
+
+    `stop_on_error`：中途收到 error 帧（非目标）时立即返回该帧，避免「服务端不再发帧」
+    时测试永久阻塞在 receive_json（失败信息也更可读）。
+    """
     wanted = set(types)
     frames: list[dict] = []
     for _ in range(limit):
         message = ws.receive_json()
         frames.append(message)
-        if message.get("type") in wanted:
+        kind = message.get("type")
+        if kind in wanted:
+            return frames, message
+        if stop_on_error and kind == "error" and "error" not in wanted:
             return frames, message
     raise AssertionError(f"在 {limit} 帧内未收到 {wanted}；最后帧：{frames[-1] if frames else None}")
 

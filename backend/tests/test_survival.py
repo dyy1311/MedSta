@@ -66,12 +66,15 @@ def test_censored_sorted_after_events_at_same_time() -> None:
     assert second["survival"] == pytest.approx(first["survival"], abs=1e-12)
 
 
-def test_median_survival_interpolated() -> None:
-    """B4: 生存率首次降至 50% 以下时在相邻时间点间插值。"""
+def test_median_survival_uses_step_definition() -> None:
+    """P1: 中位生存期取 KM 阶梯定义——S(t)≤0.5 的最小观测时间（教材/R 口径）。
+
+    教材表 14-2：S(33)=0.553 > 0.5，S(46)=0.474 < 0.5 → 中位生存期 = 46。
+    此前线性插值给 41.73，系统性偏离 KM 阶梯函数的标准定义（审查修复）。
+    """
     result = km_estimate(TIME_14_2, EVENT_14_2)
 
-    # S(33)=0.553 > 0.5，S(46)=0.474 < 0.5 → 33 + (0.553−0.5)/(0.553−0.474)×13
-    assert result["median_survival"] == pytest.approx(41.73, abs=0.05)
+    assert result["median_survival"] == pytest.approx(46.0)
     assert result["median_reached"] is True
     assert result["median_survival_note"] == ""
 

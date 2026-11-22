@@ -54,7 +54,9 @@ def export_step(
         report = service.report_history.get(session_id, {}).get(report_id)
     else:
         report = service.reports.get(session_id)
-    if report is None or step_index >= len(report["steps"]):
+    report_steps = (report or {}).get("steps") or []
+    # 负数下标会让 Python 静默导出别的步骤：显式拒绝
+    if report is None or step_index < 0 or step_index >= len(report_steps):
         raise HTTPException(status_code=404, detail="执行报告不存在")
     step = report["steps"][step_index]
     table = step.get("table")

@@ -11,6 +11,7 @@ function workspace(overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     name: "cohort.csv",
     profile: PROFILE,
     reports: [],
+    sessionId: "s1",
     ...overrides,
   };
 }
@@ -40,7 +41,7 @@ describe("WorkspacePanel", () => {
     expect(screen.getByText("数据画像")).toBeInTheDocument();
     expect(screen.getByText("6 行 × 2 列")).toBeInTheDocument();
     expect(screen.getByText("统计表交付（1）")).toBeInTheDocument();
-    expect(screen.getByText("执行产出（1 图）")).toBeInTheDocument();
+    expect(screen.getByText("图表交付（1）")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "CSV" })).toHaveAttribute(
       "href",
       "/export/s1/0?format=csv"
@@ -84,7 +85,7 @@ describe("WorkspacePanel", () => {
     expect(onUpload.mock.calls[0][0]).toBeInstanceOf(File);
   });
 
-  it("修改列类型下拉会回调 onSetColumnType", () => {
+  it("修改列类型下拉会回调 onSetColumnType（带当前工作区 datasetId）", () => {
     const onSetColumnType = vi.fn();
     render(
       <WorkspacePanel
@@ -98,7 +99,8 @@ describe("WorkspacePanel", () => {
     // [0]=批量类型，[1..]=逐行类型下拉；value 是第 2 行
     fireEvent.change(selects[2], { target: { value: "index" } });
 
-    expect(onSetColumnType).toHaveBeenCalledWith("value", "index");
+    // 修复：跨工作区编辑必须落到被编辑的数据集（此前误改会话绑定数据集）
+    expect(onSetColumnType).toHaveBeenCalledWith("d1", "value", "index", undefined);
   });
 
   it("事后比较表新增 method 列可正常渲染", () => {
@@ -153,8 +155,8 @@ describe("WorkspacePanel", () => {
     );
 
     expect(screen.getByText("统计表交付（2）")).toBeInTheDocument();
-    expect(screen.getByText("分布统计")).toBeInTheDocument();
-    expect(screen.getByText("两组比较")).toBeInTheDocument();
+    expect(screen.getAllByText("分布统计").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("两组比较").length).toBeGreaterThan(0);
     // 第二次报告的步骤序号从 0 开始，导出链接按报告内 step_index
     const links = screen.getAllByRole("link", { name: "CSV" });
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
@@ -238,5 +240,55 @@ describe("ChartCard", () => {
       "href",
       "/report/s1?style=lite&format=pdf"
     );
+  });
+});
+
+describe("图表按轮次倒序展示", () => {
+  const OLD_REPORT = {
+    report_id: "r1",
+    steps: [
+      {
+        title: "主要指标分布描述",
+        method: "describe",
+        status: "success",
+        artifact: "old_hist.png",
+        result: {},
+      },
+    ],
+  };
+  const NEW_REPORT = {
+    report_id: "r2",
+    steps: [
+      {
+        title: "主要指标分布描述",
+        method: "describe",
+        status: "success",
+        artifact: "new_hist.png",
+        result: {},
+      },
+    ],
+  };
+
+  it("所有轮次的图表都展示，最新交付的排在最上面", () => {
+    const tab = workspace({ reports: [OLD_REPORT, NEW_REPORT] });
+    const { container } = render(
+      <WorkspacePanel
+        sessionId="s1"
+        workspaces={[tab]}
+        activeId={tab.datasetId}
+        uploading={false}
+        onActivate={vi.fn()}
+        onSetColumnType={vi.fn()}
+        onUpload={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/图表交付（2）/)).toBeInTheDocument();
+    const images = [...container.querySelectorAll("img")];
+    expect(images.map((node) => node.getAttribute("src"))).toEqual([
+      "/data/s1/d1/artifacts/new_hist.png",
+      "/data/s1/d1/artifacts/old_hist.png",
+    ]);
+    expect(screen.queryByTestId("previous-rounds")).not.toBeInTheDocument();
   });
 });

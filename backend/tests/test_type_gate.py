@@ -72,6 +72,28 @@ async def test_chat_blocked_until_types_confirmed(service) -> None:
     assert plans  # pending chat 自动继续
 
 
+async def test_type_confirm_batch_rejects_without_partial_update(service) -> None:
+    """批次11 生产加固：批量确认含未知列时整体拒绝，已列项不得先落库（半更新防护）。"""
+    from medsta.session.manager import manager
+
+    service, sid = service
+    sent, send = _collector()
+    assert manager.get(sid).data.profile.columns["age"].type == "continuous"
+
+    await service.handle(
+        sid,
+        {"type": "type_confirm", "types": {"age": "categorical", "nope": "continuous"}},
+        send,
+    )
+
+    errors = [m for m in sent if m.get("type") == "error"]
+    assert errors and errors[0]["code"] == "COLUMN_NOT_FOUND"
+    session = manager.get(sid)
+    # 先行项未被修改、整体未敲定
+    assert session.data.profile.columns["age"].type == "continuous"
+    assert session.data.type_confirmed is not True
+
+
 async def test_workspace_switch_carries_type_confirmed(service) -> None:
     """切换工作区推送 type_confirmed 状态"""
     service, sid = service

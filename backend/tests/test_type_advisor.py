@@ -117,3 +117,36 @@ async def test_suggest_requires_model(service_env) -> None:
 
     error = next(f for f in frames if f["type"] == "error")
     assert error["code"] == "MODEL_UNAVAILABLE"
+
+
+async def test_advise_runs_off_event_loop(service_env) -> None:
+    """P1: 模型调用（阻塞式 HTTP，默认超时 120s）必须移出事件循环。"""
+    import asyncio
+    import time as _time
+
+    from medsta.agents.type_advisor import ColumnAdviceReport, ColumnTypeSuggestion
+
+    class SleepyAdvisor:
+        def advise(self, evidence):
+            _time.sleep(0.15)
+            return ColumnAdviceReport(
+                columns=[ColumnTypeSuggestion(name="年龄", suggested_type="continuous")]
+            )
+
+    service, session_id = service_env
+    service.type_advisor = SleepyAdvisor()
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    hb = asyncio.create_task(heartbeat())
+    frames = await _sent(service, session_id, {"type": "suggest_column_types"})
+    hb.cancel()
+
+    assert any(f["type"] == "column_type_suggestions" for f in frames)
+    # 0.15s 阻塞期间循环应保持可调度（阻塞实现 ticks≈0）
+    assert ticks >= 4, f"事件循环疑似被阻塞：ticks={ticks}"

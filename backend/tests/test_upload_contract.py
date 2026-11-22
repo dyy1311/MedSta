@@ -115,3 +115,29 @@ def test_header_only_csv_is_accepted_with_zero_rows(client, session_id: str) -> 
     assert resp.status_code == 200
     assert resp.json()["profile"]["row_count"] == 0
     assert resp.json()["profile"]["column_count"] == 2
+
+
+def test_upload_parse_failure_cleans_written_file(client, session_id, data_root) -> None:
+    """P1: 解析失败返回可分类 400，且已写入的数据文件被清理（不留孤儿文件）。"""
+    resp = _upload(client, session_id, "broken.xlsx", b"not-an-excel-file")
+
+    assert resp.status_code == 400
+    assert "解析失败" in resp.json()["detail"]
+    leftovers = list((data_root / session_id).glob("*/dataset.*"))
+    assert leftovers == []
+
+
+def test_upload_row_limit_rejected(
+    client, session_id, data_root, monkeypatch
+) -> None:
+    """046 B1: 行数超过 MEDSTA_MAX_ROWS（默认 20 万，可调）拒绝并清理文件。"""
+    monkeypatch.setenv("MEDSTA_MAX_ROWS", "5")
+    content = b"group,value\n" + b"A,1\n" * 6
+
+    resp = _upload(client, session_id, "big.csv", content)
+
+    assert resp.status_code == 400
+    assert "行数" in resp.json()["detail"]
+    assert "MEDSTA_MAX_ROWS" in resp.json()["detail"]
+    leftovers = list((data_root / session_id).glob("*/dataset.*"))
+    assert leftovers == []

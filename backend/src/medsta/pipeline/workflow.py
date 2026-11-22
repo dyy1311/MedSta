@@ -33,7 +33,9 @@ class AnalysisWorkflow:
         self._executor = executor or PipelineExecutor()
         self._record_store = record_store
         self._on_step = None
+        self._on_step_result = None
         self._exec_done: asyncio.Event | None = None
+        self._pending_start: dict = {}
         self._flow = self._build_flow()
 
     # ---- 图定义 ----
@@ -49,20 +51,36 @@ class AnalysisWorkflow:
             loop = asyncio.get_running_loop()
             executor = self._executor
             business_on_step = self._on_step
+            business_on_step_result = self._on_step_result
 
             def thread_on_step(index: int, total: int, title: str) -> None:
                 # 统计计算在工作线程运行：进度回调须派发回事件循环线程
                 loop.call_soon_threadsafe(self._dispatch_on_step, (index, total, title))
+
+            def _executor_callbacks(target: Any) -> dict:
+                """按 executor 签名组装回调：外部/历史替身不认识 on_step_result 时不传。"""
+                import inspect
+
+                kwargs: dict[str, Any] = {}
+                params = inspect.signature(target.execute).parameters
+                if business_on_step and "on_step" in params:
+                    kwargs["on_step"] = thread_on_step
+                if business_on_step_result and "on_step_result" in params:
+                    kwargs["on_step_result"] = thread_on_step_result
+                return kwargs
+
+            def thread_on_step_result(index: int, total: int, payload: dict) -> None:
+                # 节点级交付：每步完成即派发（同一线程约束）
+                loop.call_soon_threadsafe(
+                    self._dispatch_on_step_result, (index, total, payload)
+                )
 
             if self._exec_done is not None:
                 self._exec_done.clear()
 
             def run_sync() -> Any:
                 return executor.execute(
-                    df,
-                    plan,
-                    artifact_dir,
-                    on_step=thread_on_step if business_on_step else None,
+                    df, plan, artifact_dir, **_executor_callbacks(executor)
                 )
 
             report = await asyncio.to_thread(run_sync)
@@ -111,10 +129,55 @@ class AnalysisWorkflow:
 
     # ---- 公共接口 ----
 
+    def create(
+        self,
+        *,
+        session_id: str,
+        plan: AnalysisPlan,
+        df: pd.DataFrame,
+        artifact_dir: str | Path,
+        on_step: Any = None,
+        on_step_result: Any = None,
+    ) -> Any:
+        """创建执行句柄（同步、未启动）：调用方先登记句柄再后台启动。
+
+        执行期 WS 收包不阻塞（P1）：句柄在启动前即可用于中断/清理。
+        """
+        self._on_step = on_step
+        self._on_step_result = on_step_result
+        self._exec_done = asyncio.Event()
+        execution: Any = self._flow.create_execution(auto_close=False)
+        execution.update_runtime_resources(
+            {
+                "dataframe": df,
+                "artifact_dir": Path(artifact_dir),
+                "session_id": session_id,
+                "record_store": self._record_store,
+            }
+        )
+        self._pending_start = {"plan": plan.model_dump()}
+        return execution
+
+    async def start(self, execution: Any) -> Any:
+        """启动已创建的执行（阻塞至流程首个暂停点/完成）。"""
+        return await execution.async_start(dict(self._pending_start))
+
     def _dispatch_on_step(self, args: tuple) -> None:
         """在事件循环线程中调用业务进度回调（工作线程经 call_soon_threadsafe 到达）。"""
         if self._on_step is not None:
             self._on_step(*args)
+
+    def _dispatch_on_step_result(self, args: tuple) -> None:
+        """节点级交付回调（同样从工作线程派发回事件循环）。"""
+        if self._on_step_result is not None:
+            self._on_step_result(*args)
+
+    def execution_done(self) -> bool:
+        """同步计算是否已完成（False=计算进行中；True=审阅等待或已结束）。
+
+        供 resume 判别「执行中」与「审阅等待」：前者不得降级状态机（P0 修复）。
+        """
+        return self._exec_done is None or self._exec_done.is_set()
 
     async def run(
         self,
@@ -124,20 +187,17 @@ class AnalysisWorkflow:
         df: pd.DataFrame,
         artifact_dir: str | Path,
         on_step: Any = None,
+        on_step_result: Any = None,
     ) -> Any:
-        """启动一次工作流执行；返回 execution 句柄（随后进入审阅等待）。"""
-        self._on_step = on_step
-        self._exec_done = asyncio.Event()
-        execution = self._flow.create_execution(auto_close=False)
-        execution.update_runtime_resources(
-            {
-                "dataframe": df,
-                "artifact_dir": Path(artifact_dir),
-                "session_id": session_id,
-                "record_store": self._record_store,
-            }
+        """兼容入口：创建并启动，返回 execution 句柄（随后进入审阅等待）。"""
+        execution = self.create(
+            session_id=session_id,
+            plan=plan,
+            df=df,
+            artifact_dir=artifact_dir,
+            on_step=on_step,
         )
-        await execution.async_start({"plan": plan.model_dump()})
+        await self.start(execution)
         return execution
 
     async def wait_for_review(self, execution: Any, timeout: float = _REVIEW_TIMEOUT) -> dict:

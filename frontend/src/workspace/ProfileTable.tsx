@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Database } from "lucide-react";
+import { ChevronDown, Database, Loader2 } from "lucide-react";
 import { COLUMN_TYPE_LABELS, type TableProfile } from "../types";
 
 const SELECTABLE: { value: string; label: string }[] = [
@@ -28,13 +28,18 @@ interface ColumnSuggestion {
 
 interface Props {
   profile: TableProfile;
-  onSetColumnType?: (column: string, type: string) => void;
-  /** 批量列类型修改：一次回调 {列名: 类型} */
-  onSetColumnTypes?: (types: Record<string, string>) => void;
+  onSetColumnType?: (column: string, type: string, source?: "manual" | "ai") => void;
+  /** 批量列类型修改：一次回调 {列名: 类型}，source 区分「采纳建议」与手动批量 */
+  onSetColumnTypes?: (types: Record<string, string>, source?: "manual" | "ai") => void;
   /** 触发模型列类型建议（041 AI 确认） */
   onSuggestTypes?: () => void;
   /** 模型建议（041）；用户采纳后经宿主校验落库 */
   suggestions?: ColumnSuggestion[];
+  /** 模型正在生成建议：按钮进入加载态，避免重复点击与「没反应」的错觉 */
+  suggesting?: boolean;
+  /** 折叠：模块卡可收起 */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export default function ProfileTable({
@@ -43,6 +48,9 @@ export default function ProfileTable({
   onSetColumnTypes,
   onSuggestTypes,
   suggestions = [],
+  suggesting = false,
+  collapsed = false,
+  onToggleCollapse,
 }: Props) {
   const columns = Object.values(profile.columns);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -78,8 +86,21 @@ export default function ProfileTable({
         <span className="ml-auto text-xs text-ink-muted">
           {profile.row_count} 行 × {profile.column_count} 列
         </span>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "展开数据画像" : "收起数据画像"}
+            className="cursor-pointer rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface-page hover:text-ink"
+          >
+            <ChevronDown className={`h-4 w-4 transition-transform ${collapsed ? "-rotate-90" : ""}`} />
+          </button>
+        )}
       </div>
 
+      {!collapsed && (
+        <>
       {editable && suggestions.length > 0 && (
         <div
           data-testid="suggestions-bar"
@@ -93,7 +114,7 @@ export default function ProfileTable({
               if (!onSetColumnTypes) return;
               const types: Record<string, string> = {};
               for (const item of suggestions) types[item.name] = item.suggested_type;
-              onSetColumnTypes(types);
+              onSetColumnTypes(types, "ai");
             }}
             className="ml-auto cursor-pointer rounded-lg bg-primary px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-primary-hover"
           >
@@ -106,10 +127,22 @@ export default function ProfileTable({
           <button
             type="button"
             onClick={onSuggestTypes}
-            className="cursor-pointer rounded-lg border border-primary-cyan/50 px-2.5 py-1 text-[11px] font-medium text-primary-cyan transition-colors hover:bg-primary-cyan/10"
+            disabled={suggesting}
+            aria-busy={suggesting}
+            data-testid="suggest-types"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-primary-cyan/50 px-2.5 py-1 text-[11px] font-medium text-primary-cyan transition-colors hover:bg-primary-cyan/10 disabled:cursor-wait disabled:opacity-70"
           >
-            AI 确认类型
+            {suggesting && <Loader2 className="h-3 w-3 animate-spin" />}
+            {suggesting ? "正在分析列含义…" : "AI 确认类型"}
           </button>
+          {suggesting && (
+            <p
+              data-testid="suggest-pending"
+              className="mt-1.5 text-[11px] leading-relaxed text-ink-muted"
+            >
+              模型正在逐列判断语义类型（表越大越慢，通常几秒到十几秒），结果到达后会自动出现在下表。
+            </p>
+          )}
         </div>
       )}
 
@@ -210,7 +243,8 @@ export default function ProfileTable({
                           onClick={() =>
                             onSetColumnType(
                               col.name,
-                              suggestionByColumn.get(col.name)!.suggested_type
+                              suggestionByColumn.get(col.name)!.suggested_type,
+                              "ai"
                             )
                           }
                           className="cursor-pointer text-[10px] font-medium text-primary hover:underline"
@@ -266,6 +300,8 @@ export default function ProfileTable({
           </tbody>
         </table>
       </div>
+        </>
+      )}
     </div>
   );
 }

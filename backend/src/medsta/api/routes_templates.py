@@ -52,6 +52,9 @@ def delete_template(name: str, request: Request) -> dict:
 @router.get("/templates/{name}/export")
 def export_template(name: str, request: Request) -> Response:
     """导出模板为 JSON 文件（037 文件交换）。"""
+    # 与保存/删除同口径校验（纵深防御：路由层虽已挡住带斜杠的路径参数）
+    if not is_safe_name(name):
+        raise HTTPException(status_code=400, detail="非法模板名")
     template = _store(request).load(name)
     if template is None:
         raise HTTPException(status_code=404, detail=f"模板不存在：{name}")
@@ -89,3 +92,40 @@ def import_template(body: dict, request: Request, overwrite: bool = False) -> di
             status_code=409, detail=f"模板已存在：{name}（带 overwrite=true 覆盖）"
         )
     return store.save(name, steps)
+
+
+@router.get("/templates/builtin")
+def list_builtin_recipes() -> dict:
+    """内置推荐流程模板（按统计 skills 预设，节点均为注册表工具）。"""
+    from medsta.agents.chain_recipes import recipe_catalog
+
+    return {"recipes": recipe_catalog()}
+
+
+@router.post("/sessions/{session_id}/chain/match")
+async def match_chain_recipe(session_id: str, body: dict, request: Request) -> dict:
+    """把推荐模板的占位槽位匹配到当前数据的真实列（AI 优先，失败回退规则匹配）。
+
+    返回的 steps 可直接放进装配区，用户仍可修改；`warnings` 说明哪些步骤被跳过。
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from medsta.session.manager import manager
+
+    if manager.get(session_id) is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    recipe_id = str(body.get("recipe_id") or "").strip()
+    if not recipe_id:
+        raise HTTPException(status_code=400, detail="缺少 recipe_id")
+    use_ai = body.get("use_ai", True)
+    try:
+        return await run_in_threadpool(
+            request.app.state.service.match_chain_recipe,
+            session_id,
+            recipe_id,
+            bool(use_ai),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(status_code=404, detail="会话不存在") from None

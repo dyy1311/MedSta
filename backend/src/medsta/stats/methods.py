@@ -380,13 +380,26 @@ def group_compare(df: pd.DataFrame, step: Any, params: dict) -> dict:
     (name_a, values_a), (name_b, values_b) = groups[0], groups[1]
     paired = bool(params.get("paired"))
     length = min(len(values_a), len(values_b))
-    if paired and length < 2:
-        raise ValueError(f"配对样本仅 {length} 对，至少需要 2 对")
     alpha = _alpha(params)
     strategy_steps: list[str] = []
 
     if paired:
-        difference = values_a[:length] - values_b[:length]
+        # 配对设计：按组内原始行序对齐，任一侧缺失剔除「整对」；
+        # 不得对各组分别 dropna 后按行序相减——错位会把不同受试者当配对（P0 修复）
+        raw_a = _numeric(df[df[group_column] == name_a], column).reset_index(drop=True)
+        raw_b = _numeric(df[df[group_column] == name_b], column).reset_index(drop=True)
+        pair_len = min(len(raw_a), len(raw_b))
+        arr_a = raw_a.iloc[:pair_len].to_numpy(dtype=float)
+        arr_b = raw_b.iloc[:pair_len].to_numpy(dtype=float)
+        keep = ~(np.isnan(arr_a) | np.isnan(arr_b))
+        values_a = arr_a[keep]
+        values_b = arr_b[keep]
+        length = int(len(values_a))
+        if length < 2:
+            raise ValueError(
+                f"配对样本剔除任一侧缺失后仅 {length} 对完整配对，至少需要 2 对"
+            )
+        difference = values_a - values_b
         strategy_steps.append("配对设计：正态性检验针对配对差值，而非两组原始值")
         strategy_steps.append("配对设计不要求两组方差齐性（教材 §7 注意事项 2），跳过方差齐性检验")
         normal, normal_steps = _normal_step([(f"{name_a}−{name_b} 差值", difference)])
@@ -1185,12 +1198,35 @@ def correlation(df: pd.DataFrame, step: Any, params: dict) -> dict:
     }
 
 
+def _regression_frame(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """回归数值表：类别列在这里点名拒绝，避免 coerce 成全缺失后再在拟合时崩。"""
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"回归列不存在：{', '.join(missing)}")
+    converted = df[list(columns)].apply(pd.to_numeric, errors="coerce")
+    bad: list[str] = []
+    for column in columns:
+        introduced = int((converted[column].isna() & df[column].notna()).sum())
+        if introduced:
+            bad.append(f"「{column}」含 {introduced} 个非数值")
+    if bad:
+        raise ValueError(
+            "回归的结局和自变量必须是数值："
+            + "；".join(bad)
+            + "。类别列请先编码为数值，或改用分类方法"
+        )
+    frame = converted.dropna()
+    if frame.empty:
+        raise ValueError("回归有效样本为 0：结局或自变量在对齐后没有完整数值行")
+    return frame
+
+
 def regression(df: pd.DataFrame, step: Any, params: dict) -> dict:
     import statsmodels.api as sm
 
     target = params["target"]
     features = list(params["features"])
-    frame = df[[target, *features]].apply(pd.to_numeric, errors="coerce").dropna()
+    frame = _regression_frame(df, [target, *features])
     y = frame[target].astype(float)
     x = sm.add_constant(frame[features].astype(float))
     model = sm.OLS(y, x).fit()
@@ -1268,7 +1304,7 @@ def logistic_regression(df: pd.DataFrame, step: Any, params: dict) -> dict:
 
     target = params["target"]
     features = list(params["features"])
-    frame = df[[target, *features]].apply(pd.to_numeric, errors="coerce").dropna()
+    frame = _regression_frame(df, [target, *features])
     y = frame[target].astype(float)
     if not set(y.unique().tolist()) <= {0.0, 1.0}:
         raise ValueError(f"logistic 回归结局「{target}」必须为 0/1 二分类")

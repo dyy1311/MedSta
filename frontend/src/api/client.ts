@@ -1,4 +1,4 @@
-import type { Capabilities, TableProfile, WsEvent } from "../types";
+import type { Capabilities, TableProfile, WorkspaceSnapshot, WsEvent } from "../types";
 
 /** 044：登录令牌（localStorage）；所有请求与 WS 自动携带 */
 export function authHeaders(): Record<string, string> {
@@ -22,8 +22,36 @@ export async function fetchCapabilities(): Promise<Capabilities> {
   return response.json();
 }
 
-export function createSession(): Promise<{ session_id: string; status: string }> {
-  return apiFetch("/sessions", { method: "POST" }).then((r) => r.json());
+export async function createSession(): Promise<{ session_id: string; status: string }> {
+  const resp = await apiFetch("/sessions", { method: "POST" });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(String((detail as Record<string, string>).detail ?? "创建会话失败"));
+  }
+  return resp.json();
+}
+
+/** 批次12 删除会话：后端一并清理快照/事件流/图表产物。 */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const resp = await apiFetch(`/sessions/${sessionId}`, { method: "DELETE" });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(String((detail as Record<string, string>).detail ?? "删除会话失败"));
+  }
+}
+
+/** 批次13 批量清理重复会话：按绑定文件名分组保留最新，其余删除（仅本人会话）。 */
+export async function cleanupDuplicateSessions(): Promise<{
+  deleted: string[];
+  kept: string[];
+  skipped: string[];
+}> {
+  const resp = await apiFetch("/sessions/cleanup_duplicates", { method: "POST" });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(String((detail as Record<string, string>).detail ?? "清理重复会话失败"));
+  }
+  return resp.json();
 }
 
 export async function uploadData(
@@ -55,6 +83,12 @@ export interface ConnectOptions {
   getLastSeq?: () => number | null;
   /** 连接状态回调：connected（含重连成功）/ reconnecting */
   onStatus?: (status: "connected" | "reconnecting") => void;
+  /** 首连是否也发 resume+last_seq（缺省仅在有已知 last_seq 时发）。
+   *  刷新/重启后恢复的会话应为 true：last_seq 取 0 全量回放，重建聊天上下文。 */
+  shouldResume?: () => boolean;
+  /** 令牌失效（4401/4403）：停止重连并交给上层显示登录卡。
+   *  令牌在服务端内存表中，后端重启后全部失效——无限退避重连没有意义。 */
+  onAuthError?: () => void;
 }
 
 /**
@@ -68,7 +102,7 @@ export function connectSession(
   onOpen?: () => void,
   options: ConnectOptions = {}
 ): SessionConnection {
-  const { getLastSeq, onStatus } = options;
+  const { getLastSeq, onStatus, shouldResume, onAuthError } = options;
   let manual = false;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -83,8 +117,10 @@ export function connectSession(
       attempt = 0;
       onStatus?.("connected");
       const lastSeq = getLastSeq?.();
-      if (lastSeq != null) {
-        socket?.send(JSON.stringify({ type: "resume", last_seq: lastSeq }));
+      const wantResume = shouldResume ? shouldResume() : lastSeq != null;
+      if (wantResume) {
+        // last_seq 缺省 0：首连回放全部历史帧（刷新/重启后重建聊天上下文）
+        socket?.send(JSON.stringify({ type: "resume", last_seq: lastSeq ?? 0 }));
       }
       onOpen?.();
     };
@@ -96,8 +132,15 @@ export function connectSession(
       }
     };
     socket.onerror = () => console.error("WebSocket 连接错误");
-    socket.onclose = () => {
+    socket.onclose = (event?: { code?: number }) => {
       if (manual) return;
+      // 4401/4403 = 令牌缺失/失效（服务端 close code）：重连也不会成功
+      if (event?.code === 4401 || event?.code === 4403) {
+        manual = true;
+        onStatus?.("reconnecting");
+        onAuthError?.();
+        return;
+      }
       attempt += 1;
       onStatus?.("reconnecting");
       timer = setTimeout(connect, Math.min(10000, 1000 * 2 ** (attempt - 1)));
@@ -121,10 +164,53 @@ export function connectSession(
   };
 }
 
-export function artifactUrl(sessionId: string, filename: string): string {
-  return `/data/${sessionId}/artifacts/${filename}`;
+/** 044：图片/下载直链无法携带 Authorization 头——与 WS 同口径追加 ?token= */
+export function withToken(url: string): string {
+  const stored = localStorage.getItem("medsta_token");
+  if (!stored) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(stored)}`;
 }
 
+export function artifactUrl(sessionId: string, filename: string): string {
+  return withToken(`/data/${sessionId}/artifacts/${filename}`);
+}
+
+
+/** 切换会话的激活工作区：宿主持久化 active_dataset_id，后续分析与画像以它为准。
+ *  用 REST（而非 WS）是为了与 WS 连接状态解耦——跨会话切标签时连接正在重连。 */
+export async function fetchWorkspace(sessionId: string): Promise<WorkspaceSnapshot> {
+  const resp = await apiFetch(`/sessions/${sessionId}/workspace`);
+  if (!resp.ok) {
+    throw new Error(`工作区快照加载失败（${resp.status}）`);
+  }
+  return resp.json();
+}
+
+/** 清空工作区既往产出：图表/统计表/执行报告删除，导入表格保留。 */
+export async function clearWorkspaceOutputs(
+  sessionId: string
+): Promise<{ session_id: string; outputs_cleared_seq: number | null }> {
+  const resp = await apiFetch(`/sessions/${sessionId}/workspace/outputs`, { method: "DELETE" });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(String((detail as Record<string, string>).detail ?? "清空产出失败"));
+  }
+  return resp.json();
+}
+
+export async function activateWorkspace(
+  sessionId: string,
+  datasetId: string
+): Promise<{ type: string; dataset_id: string; name: string; type_confirmed: boolean; profile: TableProfile }> {
+  const resp = await apiFetch(`/sessions/${sessionId}/workspace/${datasetId}/activate`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(String((detail as Record<string, string>).detail ?? "切换工作区失败"));
+  }
+  return resp.json();
+}
 
 export function updateColumnType(
   sessionId: string,
@@ -146,12 +232,14 @@ export function updateColumnType(
 export function updateColumnTypes(
   sessionId: string,
   datasetId: string,
-  types: Record<string, string>
+  types: Record<string, string>,
+  /** 变更来源：ai=采纳模型建议（后端据此在会话区生成对应提示） */
+  source: "manual" | "ai" = "manual"
 ): Promise<{ type: string; dataset_id: string; profile: TableProfile }> {
   return apiFetch(`/sessions/${sessionId}/workspace/${datasetId}/columns`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ types }),
+    body: JSON.stringify({ types, source }),
   }).then(async (response) => {
     if (!response.ok) {
       const detail = await response.json().catch(() => ({ detail: response.statusText }));
@@ -186,4 +274,55 @@ export async function listSessions(): Promise<
     sessions: { session_id: string; name: string | null; status: string; dataset_id: string | null }[];
   };
   return payload.sessions ?? [];
+}
+
+/** 内置推荐工作链模板（按统计 skills 预设，节点均为注册表工具） */
+export interface BuiltinRecipe {
+  id: string;
+  title: string;
+  description: string;
+  skill: string;
+  steps: {
+    title: string;
+    method: string;
+    chart_type: string;
+    targets: string[];
+    params: Record<string, string>;
+    fixed: Record<string, unknown>;
+    rationale: string;
+    method_available: boolean;
+  }[];
+  slots: { slot: string; label: string }[];
+}
+
+export async function fetchBuiltinRecipes(): Promise<BuiltinRecipe[]> {
+  const resp = await apiFetch("/templates/builtin");
+  if (!resp.ok) throw new Error(`推荐模板加载失败（${resp.status}）`);
+  const payload = (await resp.json()) as { recipes: BuiltinRecipe[] };
+  return payload.recipes ?? [];
+}
+
+/** AI 一键匹配：模板占位 → 当前数据的真实列（失败自动回退规则匹配） */
+export async function matchChainRecipe(
+  sessionId: string,
+  recipeId: string,
+  useAi = true
+): Promise<{
+  recipe_id: string;
+  title: string;
+  ai: boolean;
+  steps: { title: string; method: string; target_columns: string[]; chart_type: string; params: Record<string, unknown>; rationale: string }[];
+  matched: { step: number; slot: string; column: unknown; by: string }[];
+  warnings: string[];
+}> {
+  const resp = await apiFetch(`/sessions/${sessionId}/chain/match`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recipe_id: recipeId, use_ai: useAi }),
+  });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({}));
+    throw new Error(String((detail as { detail?: string }).detail ?? `匹配失败（${resp.status}）`));
+  }
+  return resp.json();
 }

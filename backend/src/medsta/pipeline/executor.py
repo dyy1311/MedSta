@@ -36,18 +36,68 @@ class ExecutionReport(BaseModel):
 
 
 def _jsonify(value: Any) -> Any:
-    """把 numpy/pandas 值转为 JSON 兼容类型。"""
+    """把 numpy/pandas 值转为 JSON 兼容类型。
+
+    NaN/Inf → None；numpy 标量（含 np.bool_，它不是 Python bool 的子类）
+    统一走 `.item()` 或显式转换——漏转会让 websocket.send_json 抛 TypeError，
+    整帧 review_request 发不出去，前端永远停在「执行中」。
+    """
     if isinstance(value, dict):
         return {str(k): _jsonify(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonify(v) for v in value]
+    if isinstance(value, np.bool_):
+        return bool(value)
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, (np.floating, float)):
-        return None if pd.isna(value) else float(value)
+        # NaN/±Inf 一律归一为 null：JSON 无对应字面量（浏览器 JSON.parse 直接失败）
+        return float(value) if np.isfinite(value) else None
     if isinstance(value, np.ndarray):
         return [_jsonify(v) for v in value.tolist()]
+    if isinstance(value, np.datetime64):
+        return None if pd.isna(value) else str(value)
+    if isinstance(value, np.generic):
+        return _jsonify(value.item())
+    if value is pd.NaT:
+        return None
+    if isinstance(value, (pd.Timestamp, pd.Timedelta)):
+        return None if pd.isna(value) else str(value)
     return value
+
+
+def execute_node(
+    df: pd.DataFrame, step: Any, artifact_dir: str | pathlib.Path, index: int
+) -> tuple[dict, Any]:
+    """执行单个节点（047 重试/定点修正复用）：返回 (节点结果 dict, 链间 DataFrame)。
+
+    失败不外抛，返回 status=failed 的结果——调用方据 status 交付并决定是否继续。
+    """
+    try:
+        result, artifact, next_frame = execute_step_with_frame(df, step, artifact_dir, index)
+        payload = {
+            "title": step.title,
+            "method": step.method,
+            "status": "success",
+            "result": _jsonify(result),
+            "artifact": artifact,
+            "table": _jsonify(result.get("table")),
+        }
+        return payload, next_frame
+    except Exception as exc:  # 单节点失败不阻断后续节点
+        return (
+            {
+                "title": step.title,
+                "method": step.method,
+                "status": "failed",
+                "error": {
+                    "code": ErrorCode.EXECUTION_FAILED.value,
+                    "message": str(exc),
+                    "hint": "检查该步骤的参数取值与数据分布（样本量、组数、缺失）",
+                },
+            },
+            None,
+        )
 
 
 class PipelineExecutor:
@@ -59,6 +109,7 @@ class PipelineExecutor:
         plan: AnalysisPlan,
         artifact_dir: str | pathlib.Path,
         on_step: Any = None,
+        on_step_result: Any = None,
     ) -> ExecutionReport:
         issues = validate_plan(plan, df)
         hard_issues = [issue for issue in issues if issue.code in HARD_ISSUE_CODES]
@@ -70,6 +121,16 @@ class PipelineExecutor:
         report = ExecutionReport()
         total = len(plan.steps)
         shared_paths: list[tuple[int, pathlib.Path]] = []
+
+        def emit_step_result(index: int, *, updated: bool = False) -> None:
+            """单节点交付：每步完成立即回调（失败节点同样交付，不阻断后续）。"""
+            if on_step_result is None:
+                return
+            payload = report.steps[index].model_dump()
+            payload["index"] = index
+            payload["total"] = total
+            payload["updated"] = updated
+            on_step_result(index, total, payload)
         for index, step in enumerate(plan.steps):
             if on_step is not None:
                 on_step(index, total, step.title)
@@ -90,9 +151,12 @@ class PipelineExecutor:
                         status="success",
                         result=_jsonify(result),
                         artifact=artifact,
-                        table=result.get("table"),
+                        # 表格同样过一遍 JSON 归一：NaN/numpy 标量若原样下发，
+                        # 前端 JSON.parse 会整帧失败（表格与图表一起消失）
+                        table=_jsonify(result.get("table")),
                     )
                 )
+                emit_step_result(index)
             except Exception as exc:  # 单步失败不拖垮整份报告
                 report.steps.append(
                     StepResult(
@@ -106,6 +170,7 @@ class PipelineExecutor:
                         },
                     )
                 )
+                emit_step_result(index)
         if len(shared_paths) >= 2:
             from medsta.stats.plotting import render_combined
 
@@ -113,4 +178,5 @@ class PipelineExecutor:
             for index, _ in shared_paths:
                 report.steps[index].artifact = combined.name
                 report.steps[index].result["artifact"] = combined.name
+                emit_step_result(index, updated=True)  # 拼图替换了原图，节点结果需再交付一次
         return report

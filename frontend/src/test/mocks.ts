@@ -62,7 +62,7 @@ export class FakeWebSocket {
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code?: number }) => void) | null = null;
   sent: Record<string, unknown>[] = [];
 
   constructor(url: string) {
@@ -76,9 +76,9 @@ export class FakeWebSocket {
     this.sent.push(JSON.parse(payload) as Record<string, unknown>);
   }
 
-  close() {
+  close(code = 1000) {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 
   emit(event: unknown) {

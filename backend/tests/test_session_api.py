@@ -99,6 +99,77 @@ def test_batch_column_types_updates_all_at_once() -> None:
     assert dataset["column_types"]["age"] == "ordinal"
 
 
+def test_delete_session_removes_session_and_files(client, session_id, data_root) -> None:
+    """批次12: DELETE 会话 → 列表移除、快照/数据/事件目录清理、重复删除 404。"""
+    upload = client.post(
+        f"/sessions/{session_id}/data",
+        files={"file": ("d.csv", io.BytesIO(b"group,value\nA,1\nB,2\n"), "text/csv")},
+    )
+    assert upload.status_code == 200
+    assert (data_root / session_id).is_dir()
+
+    resp = client.delete(f"/sessions/{session_id}")
+    assert resp.status_code == 200
+
+    from medsta.session.manager import manager
+
+    assert manager.get(session_id) is None
+    assert not (data_root / session_id).exists()
+    names = [s["session_id"] for s in client.get("/sessions").json()["sessions"]]
+    assert session_id not in names
+    # 终审修复：会话级旁路状态必须一并清理（否则删除只是从列表消失，内存常驻）
+    service = client.app.state.service
+    assert session_id not in service._busy
+    assert session_id not in service._requests
+    assert session_id not in service._pending_chats
+    assert session_id not in service._revision_notes
+
+    assert client.delete(f"/sessions/{session_id}").status_code == 404
+
+
+def test_cleanup_duplicates_keeps_newest_per_name(client, data_root) -> None:
+    """批次13: 按绑定文件名分组保留最新（快照 mtime 决定），其余删除；未绑定不动。"""
+    import os
+    import time
+
+    from medsta.session.manager import manager
+
+    def _bound(name: str) -> str:
+        sid = client.post("/sessions").json()["session_id"]
+        resp = client.post(
+            f"/sessions/{sid}/data",
+            files={"file": (name, io.BytesIO(b"group,value\nA,1\nB,2\n"), "text/csv")},
+        )
+        assert resp.status_code == 200
+        return sid
+
+    dupes = [_bound("d.csv") for _ in range(3)]
+    solo = _bound("data.csv")
+    empty = client.post("/sessions").json()["session_id"]
+
+    # 显式设定快照新旧，证明排序不依赖创建顺序（第一个创建的反而是最新）
+    for sid, age in zip(dupes, (100, 300, 200)):
+        target = data_root / sid / "snapshot.json"
+        os.utime(target, (time.time() - age, time.time() - age))
+
+    resp = client.post("/sessions/cleanup_duplicates")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body["deleted"]) == {dupes[1], dupes[2]}
+    assert dupes[0] in body["kept"]
+    # 保留者、同名无关组、未绑定会话均完好
+    assert manager.get(dupes[0]) is not None
+    assert manager.get(solo) is not None
+    assert manager.get(empty) is not None
+    # 被删者磁盘痕迹与列表项清除
+    assert not (data_root / dupes[1]).exists()
+    assert not (data_root / dupes[2]).exists()
+    names = {s["session_id"] for s in client.get("/sessions").json()["sessions"]}
+    assert dupes[1] not in names and dupes[2] not in names
+    assert empty in names
+
+
 def test_batch_column_types_rejects_unknown_column_atomically() -> None:
     """批量：含未知列时整体拒绝（404），不做部分修改。"""
     client, session_id = _client_with_session()
@@ -212,6 +283,7 @@ async def test_confirm_starts_execution(service_env) -> None:
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "confirm_plan"}, collect(sent))
     await service.handle(session_id, {"type": "chart_choice", "use_default": True}, collect(sent))
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     review_requests = [m for m in sent if m["type"] == "review_request"]
     assert len(review_requests) == 1
     assert review_requests[0]["report"]["steps"][0]["method"] == "describe"
@@ -226,6 +298,7 @@ async def test_accept_delivers(service_env) -> None:
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "confirm_plan"}, collect(sent))
     await service.handle(session_id, {"type": "chart_choice", "use_default": True}, collect(sent))
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     await service.handle(session_id, {"type": "review", "decision": "accept"}, collect(sent))
     delivered = [m for m in sent if m["type"] == "delivered"]
     assert len(delivered) == 1
@@ -241,6 +314,7 @@ async def test_revise_returns_to_discussion(service_env) -> None:
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "confirm_plan"}, collect(sent))
     await service.handle(session_id, {"type": "chart_choice", "use_default": True}, collect(sent))
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     await service.handle(
         session_id,
         {"type": "review", "decision": "revise", "content": "不要用直方图"},
@@ -262,6 +336,7 @@ async def test_session_records_persisted(service_env) -> None:
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "confirm_plan"}, collect(sent))
     await service.handle(session_id, {"type": "chart_choice", "use_default": True}, collect(sent))
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     await service.handle(session_id, {"type": "review", "decision": "accept"}, collect(sent))
     refs = await store.search(filters={"collection": "sessions", "scope.session_id": session_id})
     assert len(refs) >= 2

@@ -79,13 +79,16 @@ describe("ProfileTable 批量列类型修改", () => {
 
     // 单列采纳
     fireEvent.click(screen.getByTitle("采纳建议：value"));
-    expect(onSetColumnType).toHaveBeenCalledWith("value", "ordinal");
+    expect(onSetColumnType).toHaveBeenCalledWith("value", "ordinal", "ai");
 
     // 全部采纳
     fireEvent.click(screen.getByRole("button", { name: "全部采纳建议" }));
-    expect(onSetColumnTypes).toHaveBeenCalledWith({
-      value: "ordinal",
-      group: "categorical",
-    });
+    expect(onSetColumnTypes).toHaveBeenCalledWith(
+      {
+        value: "ordinal",
+        group: "categorical",
+      },
+      "ai"
+    );
   });
 });

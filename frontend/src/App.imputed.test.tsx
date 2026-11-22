@@ -72,9 +72,9 @@ describe("插补数据集工作区", () => {
     const original = screen.getByRole("button", { name: "cohort.csv" });
 
     expect(added).toBeInTheDocument();
-    // active 仍是原始数据集：只有它带激活态的内阴影样式
-    expect(original.className).toContain("inset");
-    expect(added.className).not.toContain("inset");
+    // active 仍是原始数据集：只有它带底边激活样式
+    expect(original.className).toContain("border-primary");
+    expect(added.className).not.toContain("border-primary");
   });
 
   it("提示文案说明已生成但未切换", async () => {
@@ -94,5 +94,29 @@ describe("插补数据集工作区", () => {
 
     expect(await screen.findByText(/已生成插补数据集/)).toBeInTheDocument();
     expect(screen.getAllByText("已插补").length).toBeGreaterThan(0);
+  });
+
+  it("点击插补标签页可切换到该工作区", async () => {
+    const { container } = render(<App />);
+    await openSessionWithData(container);
+
+    act(() => {
+      FakeWebSocket.latest().emit({
+        type: "dataset_added",
+        dataset_id: "d2",
+        name: "cohort.csv（MICE 插补）",
+        profile: PROFILE,
+        imputed: true,
+        source_dataset_id: "d1",
+      });
+    });
+
+    const added = await screen.findByRole("button", { name: /cohort\.csv（MICE 插补）/ });
+    const original = screen.getByRole("button", { name: "cohort.csv" });
+    fireEvent.click(added);
+
+    // 显式选择优先于会话默认绑定：此前解析恒命中会话绑定数据集，点击无任何效果
+    expect(added.className).toContain("border-primary");
+    expect(original.className).not.toContain("border-primary");
   });
 });

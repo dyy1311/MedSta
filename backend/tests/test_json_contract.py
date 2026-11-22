@@ -47,6 +47,13 @@ _CASES: dict[str, tuple[list[str], dict, list[int] | None]] = {
     "one_sample_test": (["value"], {"mu0": 10}, None),
     "missing_report": (["value", "value2"], {}, None),
     "impute": (["value"], {"columns": ["value"], "method": "median"}, None),
+    # 数据清洗（045）：产物数据集路径为 str，其余为标准标量
+    "dedupe": ([], {}, None),
+    "filter_rows": ([], {"conditions": [{"column": "group", "op": "eq", "value": "A"}]}, None),
+    "standardize": (["value"], {}, None),
+    "bin_column": (["value"], {"bins": 3}, None),
+    "outlier_report": (["value"], {}, None),
+    "winsorize": (["value"], {}, None),
     "normality_test": (["value"], {}, None),
     "group_compare": (["value"], {"group_column": "group"}, None),
     "anova": (["value"], {"group_column": "group"}, None),

@@ -84,3 +84,36 @@ def test_capabilities_lists_impute(client) -> None:
     assert "multiple_imputation" in planned
     assert "未实现" in planned["multiple_imputation"]["description"]
     assert "单数据集" in planned["multiple_imputation"]["description"]
+
+
+def test_imputed_dataset_survives_restart(client, app, session_id, data_root) -> None:
+    """P1: 插补数据集必须用真实 CSV 路径注册——重启恢复后两个数据集都在。
+
+    此前 attach_dataset 用数据集名当 dataset_path（假路径）落入快照，
+    restore_all 时 load_table 失败导致整个会话恢复被跳过（含原始数据集）。
+    """
+    import pathlib
+
+    app.state.service.set_agent(fake_agent(PLAN_IMPUTE))
+    upload_csv(client, session_id, content=CSV_WITH_MISSING)
+
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)
+        ws.send_json({"type": "review", "decision": "accept"})
+        collect_until(ws, {"delivered"})
+    assert len(manager.get(session_id).datasets) == 2
+
+    # 模拟重启：清空内存会话，从快照恢复
+    manager.clear()
+    from medsta.session.service import SessionService
+
+    service2 = SessionService(agent=None, record_store=None, data_root=data_root)
+    restored = service2.restore_all()
+
+    assert restored == 1
+    session = manager.get(session_id)
+    assert session is not None
+    assert len(session.datasets) == 2
+    # 插补数据集指向真实 CSV 文件（可重新加载、可再分析）
+    imputed = [d for d in session.datasets.values() if "插补" in d.name]
+    assert imputed and pathlib.Path(imputed[0].dataset_path).suffix == ".csv"

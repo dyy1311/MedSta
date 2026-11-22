@@ -120,6 +120,12 @@ def test_render_combined_builds_single_canvas(sample_df, tmp_path) -> None:
     assert combined.stat().st_size > max(first.stat().st_size, second.stat().st_size)
 
 
+def test_render_combined_rejects_fewer_than_two(tmp_path) -> None:
+    """空列表或单图不能进 matplotlib 的 subplots(0, 2)。"""
+    with pytest.raises(ValueError, match="至少需要 2 张"):
+        plotting.render_combined([], tmp_path)
+
+
 def test_unknown_chart_and_missing_group_are_rejected(sample_df, tmp_path) -> None:
     """B14: 未知图表/缺分组参数显式报错，而不是画出空图。"""
     from types import SimpleNamespace
@@ -200,3 +206,32 @@ def test_every_registered_tool_chart_is_renderable_or_declared() -> None:
         assert spec is not None
         unknown = set(spec.charts) - set(CHART_TYPES) - {"none"}
         assert unknown == set(), f"{method}: {unknown}"
+
+
+def test_histogram_facets_by_group_column(tmp_path) -> None:
+    """用户要求「每个类别做一张图」：histogram + group_by 时按组面板绘制（一张产物）。"""
+    df = pd.DataFrame(
+        {
+            "group": ["A"] * 20 + ["B"] * 20,
+            "value": list(np.linspace(1, 5, 20)) + list(np.linspace(3, 9, 20)),
+        }
+    )
+    step = _step("histogram", "describe", ["value"], {"group_by": "group"})
+
+    path = plotting.render_chart(df, step, tmp_path, 0)
+
+    assert path.exists() and path.stat().st_size > 0
+    # 断言标题进的是「总标题」而不是只覆盖第一个面板：读回图像尺寸作为弱校验
+    from PIL import Image
+
+    with Image.open(path) as image:
+        assert image.width > 600, "分面图应比单图更宽"
+
+
+def test_histogram_falls_back_when_group_has_single_value(tmp_path) -> None:
+    """组数不足或只有一组时退回总体直方图（不产生空面板）。"""
+    df = pd.DataFrame({"group": ["A"] * 10, "value": list(np.linspace(1, 5, 10))})
+    step = _step("histogram", "describe", ["value"], {"group_by": "group"})
+
+    path = plotting.render_chart(df, step, tmp_path, 0)
+    assert path.exists()

@@ -67,7 +67,11 @@ class Session:
 
 
 class SessionManager:
-    """管理会话创建、数据挂载与状态流转。内存实现；持久化由 storage/records 负责。"""
+    """管理会话创建、数据挂载与状态流转。
+
+    内存实现；快照持久化由 session/persistence.py 负责，事件流由 session/events.py
+    负责，执行记录由 Agently LocalRecordStore 负责。
+    """
 
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
@@ -84,6 +88,10 @@ class SessionManager:
 
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
+
+    def delete(self, session_id: str) -> bool:
+        """移除会话（内存）；磁盘痕迹由 SessionStore.delete 清理（批次12）。"""
+        return self._sessions.pop(session_id, None) is not None
 
     def attach_data(
         self,
@@ -113,8 +121,9 @@ class SessionManager:
         return dataset_id
 
     def attach_dataset(self, session_id: str, *, df: pd.DataFrame, name: str,
-                       dataset_id: str | None = None) -> str:
-        """测试/快捷入口：无文件路径的内存挂载。"""
+                       dataset_id: str | None = None,
+                       data_root: str | pathlib.Path = "data/sessions") -> str:
+        """测试/快捷入口：无文件路径的内存挂载（生产注册请走 attach_data 传真实路径）。"""
         from medsta.data.profiler import profile_dataframe
 
         resolved = dataset_id or uuid.uuid4().hex[:8]
@@ -123,7 +132,7 @@ class SessionManager:
             df=df,
             dataset_path=name,
             profile=profile_dataframe(df),
-            artifact_dir=pathlib.Path("data/sessions") / session_id / resolved / "artifacts",
+            artifact_dir=pathlib.Path(data_root) / session_id / resolved / "artifacts",
             name=name,
             dataset_id=resolved,
         )

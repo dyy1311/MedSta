@@ -31,6 +31,16 @@
 
 > 完整决策树（含四条主干与降级路径）见 [架构文档图 2](./architecture.md)。以下为文字版细节与阈值。
 
+### 变量角色：目标列 vs 分组列
+
+每个工具都声明 `accepts`（目标列允许的变量类型）与 `group_param`（分组参数名，如 `group_column`）：
+
+- **类别型/二值列通常是分组或分层变量**（「是否手术」「手术方式」「科室」），应放进 `params.group_column`；
+  把它们放进 `target_columns` 会被宿主以 `COLUMN_TYPE_MISMATCH` 拒绝（hint 直接给出「设为分组列」的修法）。
+- 若本意是「比较组间率/构成」，正确方法是 `chi_square`（接受类别列），而不是把类别列塞给 t/ANOVA。
+- 装配器在勾选目标列时按 `accepts` 实时提示，并提供一键「设为分组列」；讨论模型的 prompt 也禁止
+  把类别列放进 `target_columns`（两处约束互为兜底，模型侧只是语义建议，宿主校验才是权威）。
+
 ### 连续变量（group_compare / anova）
 
 ```

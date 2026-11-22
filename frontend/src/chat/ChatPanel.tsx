@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CircleStop, Play, SendHorizonal, Sparkles } from "lucide-react";
+import { CircleStop, ClipboardList, Play, SendHorizonal } from "lucide-react";
 import type { ChatMessage, Phase } from "../types";
 import PlanCard from "./PlanCard";
 import ReviewCard from "./ReviewCard";
@@ -9,8 +9,9 @@ import AnswerCard from "./AnswerCard";
 
 import AnalysisConfigCard from "./AnalysisConfigCard";
 import PlotSuggestCard from "./PlotSuggestCard";
+import StepDeliveryCard from "./StepDeliveryCard";
 import TypeReviewCard from "./TypeReviewCard";
-import type { PlotSuggestStep, TypeReviewRequest } from "../types";
+import type { PlotStyle, PlotSuggestStep, StepDelivery, TypeReviewRequest } from "../types";
 import type { ChartConfigRequest } from "../types";
 
 export interface Props {
@@ -22,13 +23,18 @@ export interface Props {
   phase: Phase;
   streamText: string;
   progress: { step: number; total: number; title: string } | null;
+  /** 047 节点级交付：每节点完成即渲染结果/错误，失败可重跑或让模型修正 */
+  stepDeliveries?: StepDelivery[];
+  datasetId?: string | null;
+  onRetryStep?: (index: number) => void;
+  onAmendStep?: (index: number, note: string) => void;
   chartConfig: ChartConfigRequest | null;
   typeReview: TypeReviewRequest | null;
   plotSuggest: PlotSuggestStep[] | null;
   onTypeConfirm: (types: Record<string, string>) => void;
-  onPlotLater: (stepIndex: number, chartType: string) => void;
+  onPlotLater: (stepIndex: number, chartType: string, style?: PlotStyle) => void;
   onChartChoice: (payload: {
-    choices: { step_id: string; chart_type: string }[];
+    choices: ({ step_id: string; chart_type: string } & PlotStyle)[];
     layout: string;
     alpha: number;
     correction: string;
@@ -55,6 +61,10 @@ export default function ChatPanel({
   phase,
   streamText,
   progress,
+  stepDeliveries = [],
+  datasetId = null,
+  onRetryStep,
+  onAmendStep,
   onUpload,
   onSend,
   onAccept,
@@ -74,31 +84,36 @@ export default function ChatPanel({
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const busy = phase === "thinking" || phase === "executing";
+  // 出图配置等待期（plan_confirmed）后端会以 SESSION_BUSY 拒绝 chat，
+  // 而前端收到 error 会清空配置卡 → 会话卡在「无卡可确认、输入又被拒」的死角。
+  // 因此必须先选配置：输入框只读。
+  const awaitingChartConfig = phase === "chart_config" && Boolean(chartConfig);
+  const inputDisabled = !uploaded || busy || awaitingChartConfig;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamText, progress]);
+  }, [messages, streamText, progress, stepDeliveries]);
 
   const submit = () => {
     const content = draft.trim();
-    if (!content || busy) return;
+    if (!content || busy || awaitingChartConfig) return;
     onSend(content);
     setDraft("");
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-1 flex-col break-words">
       <div className="border-b border-ink/8 bg-primary/5 px-4 py-1.5 text-[11px] text-primary">
         当前会话绑定表格：<span className="font-medium">{bindingName}</span>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
         {!uploaded && (
-          <div className="animate-fade-in-up rounded-2xl bg-primary-dark px-4 py-3 text-sm text-white shadow-card">
+          <div className="animate-fade-in-up rounded-2xl border border-ink/10 border-l-4 border-l-primary bg-white px-4 py-3 text-sm text-primary-dark shadow-card">
             <div className="mb-1 flex items-center gap-2 font-semibold">
-              <Sparkles className="h-4 w-4 text-primary-cyan" />
+              <ClipboardList className="h-4 w-4 text-primary" aria-hidden="true" />
               欢迎使用 MedSta
             </div>
-            <p className="leading-relaxed text-white/85">
+            <p className="leading-relaxed text-ink">
               上传数据（CSV / Excel）后，我会解析画像；用自然语言说明分析目标，
               我们讨论出方案并确认执行，最终交付图表与解释。
             </p>
@@ -111,7 +126,7 @@ export default function ChatPanel({
           if (message.role === "user") {
             return (
               <div key={index} className="flex justify-end">
-                <div className="animate-fade-in-up max-w-[80%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-white shadow-card">
+                <div className="animate-fade-in-up max-w-[80%] break-words rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-white shadow-card">
                   {message.content}
                 </div>
               </div>
@@ -142,6 +157,7 @@ export default function ChatPanel({
                 options={message.options ?? []}
                 estimand={message.estimand ?? null}
                 sapStatus={message.sap_status ?? "exploratory"}
+                flow={message.flow ?? null}
                 confirming={confirming}
                 onOption={onOption}
               />
@@ -167,6 +183,7 @@ export default function ChatPanel({
               onAccept={onAccept}
               onRevise={onRevise}
               onGoWorkspace={onGoWorkspace}
+              submitted={message.submitted}
             />
           );
         })}
@@ -225,6 +242,17 @@ export default function ChatPanel({
           </div>
         )}
 
+        {stepDeliveries.length > 0 && onRetryStep && onAmendStep && (
+          <StepDeliveryCard
+            sessionId={sessionId}
+            datasetId={datasetId}
+            items={stepDeliveries}
+            busy={busy}
+            onRetry={onRetryStep}
+            onAmend={onAmendStep}
+          />
+        )}
+
         {phase === "interrupted" && (
           <div className="animate-fade-in-up flex flex-wrap items-center gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3 py-2 text-sm text-ink">
             <span>已中断当前任务。</span>
@@ -252,17 +280,19 @@ export default function ChatPanel({
             placeholder={
               !uploaded
                 ? "请先上传数据…"
-                : phase === "delivered"
-                  ? "针对结果提问，或点「调整分析方案」…"
-                  : "描述分析目标，或对方案提出修正意见…"
+                : awaitingChartConfig
+                  ? "请先确认下方的图表配置…"
+                  : phase === "delivered"
+                    ? "针对结果提问，或点「调整分析方案」…"
+                    : "描述分析目标，或对方案提出修正意见…"
             }
-            disabled={!uploaded || busy}
+            disabled={inputDisabled}
             className="min-w-0 flex-1 rounded-xl border border-ink/15 bg-surface-page px-4 py-2.5 text-sm outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
           />
           {busy ? (
             <button
               onClick={onInterrupt}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-danger/40 bg-danger/8 px-4 py-2.5 text-sm font-medium text-danger transition-all hover:bg-danger/15 active:scale-[0.98]"
+              className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-xl border border-danger/40 bg-danger/8 px-4 py-2.5 text-sm font-medium text-danger transition-colors duration-200 hover:bg-danger/15"
             >
               <CircleStop className="h-4 w-4 animate-breathe" />
               中断
@@ -270,8 +300,8 @@ export default function ChatPanel({
           ) : (
             <button
               onClick={submit}
-              disabled={!uploaded || !draft.trim()}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-primary-dark active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={inputDisabled || !draft.trim()}
+              className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               <SendHorizonal className="h-4 w-4" />
               发送

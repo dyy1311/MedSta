@@ -42,7 +42,7 @@ step "Frontend build"
 (cd frontend && npm run build)
 
 step "Frontend unit and interaction tests"
-(cd frontend && npm test)
+(cd frontend && npm run test:coverage)
 
 if [[ "${CI_SKIP_E2E:-0}" == "1" ]]; then
   step "E2E skipped (CI_SKIP_E2E=1)"

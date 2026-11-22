@@ -26,8 +26,10 @@ test("浏览器全流程：上传 → 讨论 → 类型确认 → 方案 → 拼
   await page.getByRole("button", { name: /确认类型，开始讨论/ }).click();
 
   await expect(page.getByText("分析方案")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("分布统计")).toBeVisible();
-  await expect(page.getByText("组间比较")).toBeVisible();
+  // 047：方案以流程图交付（节点=工具、边=依赖），再确认后可逐节点执行
+  await expect(page.getByTestId("plan-flow")).toBeVisible();
+  await expect(page.getByTestId("flow-node-0")).toContainText("分布统计");
+  await expect(page.getByTestId("flow-node-1")).toContainText("组间比较");
   await page.getByRole("button", { name: "按此执行" }).click();
 
   await expect(page.getByText("出图前确认")).toBeVisible();
@@ -43,7 +45,8 @@ test("浏览器全流程：上传 → 讨论 → 类型确认 → 方案 → 拼
   await page.getByRole("button", { name: /工作区（1）/ }).click();
   await expect(page.getByText("数据画像")).toBeVisible();
   await expect(page.getByText("统计表交付（2）")).toBeVisible();
-  await expect(page.getByText("执行产出（2）")).toBeVisible();
+  // 拼图布局下两步共用一张产物图，但图表数按步骤计
+  await expect(page.getByText("图表交付（2）")).toBeVisible();
 
   const csvLink = page.getByRole("link", { name: "CSV" }).first();
   const href = await csvLink.getAttribute("href");
@@ -63,17 +66,27 @@ test("浏览器全流程：上传 → 讨论 → 类型确认 → 方案 → 拼
   await page.getByRole("button", { name: /工作区（1）/ }).click();
   await expect(sections.nth(1)).toBeVisible();
   await expect(sections.nth(0)).toBeHidden();
+
+  // 刷新：自动回到该会话，右栏由工作区快照重建（此前刷新后左右两侧都空/不挂钩）
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^会话（1）/ })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: /^工作区（1）/ }).click();
+  await expect(page.getByText("数据画像")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("统计表交付（2）")).toBeVisible();
+  await expect(page.getByText("图表交付（2）")).toBeVisible();
 });
 
 test("能力抽屉与上传失败提示（真实前后端契约）", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: /能力/ }).click();
-  await expect(page.getByText("统计能力披露")).toBeVisible();
-  await expect(page.getByText("描述性统计")).toBeVisible();
-  await expect(page.getByText("生存分析", { exact: true })).toBeVisible();
+  // 抽屉内的工具名与「工具装配」下拉项同名：作用域限定到 dialog，避免 strict 冲突
+  const drawer = page.getByRole("dialog", { name: "统计能力披露" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText("描述性统计")).toBeVisible();
+  await expect(drawer.getByText("生存分析", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭能力抽屉" }).click();
-  await expect(page.getByText("统计能力披露")).toBeHidden();
+  await expect(drawer).toBeHidden();
 
   await page.getByTitle("新建会话空间").click();
   await page.locator('input[type="file"]').first().setInputFiles({

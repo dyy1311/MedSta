@@ -44,3 +44,34 @@ def test_ensure_frontend_ready(tmp_path) -> None:
     ok.mkdir(parents=True)
     assert ensure_frontend_ready(missing) is False
     assert ensure_frontend_ready(ok.parent) is True
+
+
+def test_parse_args_log_file_default_and_off(tmp_path) -> None:
+    """B6: 子进程日志默认落 logs/dev.log；--log-file "" 关闭（终端滚屏丢失报错上下文）。"""
+    from medsta.launcher import DEFAULT_LOG_FILE
+
+    assert parse_args([]).log_file == str(DEFAULT_LOG_FILE)
+    assert parse_args(["--log-file", ""]).log_file == ""
+    custom = str(tmp_path / "app.log")
+    assert parse_args(["--log-file", custom]).log_file == custom
+
+
+def test_open_log_file_writes_and_rotates(tmp_path) -> None:
+    """B7: 追加写 + 超阈值轮转为 .1（不截断历史报错）。"""
+    from medsta.launcher import LOG_ROTATE_BYTES, open_log_file
+
+    path = tmp_path / "logs" / "dev.log"
+    handle = open_log_file(path)
+    assert handle is not None
+    handle.write("[backend] hello\n")
+    handle.close()
+    assert "hello" in path.read_text(encoding="utf-8")
+
+    path.write_text("x" * (LOG_ROTATE_BYTES + 10), encoding="utf-8")
+    handle = open_log_file(path)
+    assert handle is not None
+    handle.close()
+    assert (tmp_path / "logs" / "dev.log.1").exists()
+    assert path.stat().st_size == 0
+
+    assert open_log_file(None) is None

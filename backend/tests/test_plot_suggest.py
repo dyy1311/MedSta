@@ -52,6 +52,7 @@ async def test_table_delivery_triggers_plot_suggest(service) -> None:
     await service.handle(sid, {"type": "chat", "content": "比较两组"}, send)
     await service.wait_idle(sid)
     await service.handle(sid, {"type": "confirm_plan"}, send)
+    await service.wait_idle(sid)  # 执行后台驱动，等待审阅请求
     review = [m for m in sent if m["type"] == "review_request"]
     assert review
     suggest = [m for m in sent if m["type"] == "plot_suggest"]
@@ -65,6 +66,7 @@ async def test_plot_later_renders_and_updates_report(service) -> None:
     await service.handle(sid, {"type": "chat", "content": "比较两组"}, send)
     await service.wait_idle(sid)
     await service.handle(sid, {"type": "confirm_plan"}, send)
+    await service.wait_idle(sid)  # 执行后台驱动，等待审阅请求
     before = [m for m in sent if m["type"] == "review_request"]
     assert before[0]["report"]["steps"][0]["artifact"] is None
 

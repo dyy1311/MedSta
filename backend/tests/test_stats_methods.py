@@ -296,6 +296,17 @@ def test_regression_recovers_known_coefficients() -> None:
     assert result["n"] == 20
 
 
+def test_regression_names_non_numeric_features() -> None:
+    """类别自变量要指出列名，而不是先变成全缺失再在拟合时报一串内部错误。"""
+    df = pd.DataFrame(
+        {"y": [1.0, 2.0, 3.0, 4.0], "group": ["A", "B", "A", "B"]}
+    )
+    step = _step("regression", ["y"], target="y", features=["group"])
+
+    with pytest.raises(ValueError, match="「group」含 4 个非数值"):
+        methods.regression(df, step, step.params)
+
+
 def test_logistic_regression_learns_signal() -> None:
     """B11: 有信号的二分类数据 → OR>1、AUC>0.6、准确率>0.5。"""
     rng = np.random.default_rng(11)
@@ -536,6 +547,29 @@ def test_paired_wilcoxon_bootstrap_resamples_differences() -> None:
     # 差值几乎恒为 3 → 配对重抽样的中位差区间应窄且覆盖真实中位差
     assert high - low < 1.0
     assert low <= 3.0 <= high
+
+
+def test_paired_missing_values_drop_whole_pairs_without_misalignment() -> None:
+    """P0: 配对设计任一侧缺失时按原始行序剔整对，不得各组分别 dropna 后错位对齐。"""
+    before = np.array([10.0, 12.0, 14.0, 16.0])
+    after = np.array([9.0, 11.0, np.nan, 10.0])  # 第 3 对：after 侧缺失
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 4 + ["after"] * 4,
+            "value": list(before) + list(after),
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", paired=True, test="t")
+
+    result = methods.group_compare(df, step, step.params)
+
+    # 完整配对为 (10,9)(12,11)(16,10)；错位实现会得到 (10,9)(12,11)(14,10)
+    expected = sp_stats.ttest_rel([10.0, 12.0, 16.0], [9.0, 11.0, 10.0])
+    assert result["statistic"] == pytest.approx(expected.statistic, rel=1e-12)
+    assert result["p_value"] == pytest.approx(expected.pvalue, rel=1e-12)
+    # 组样本量按「完整配对数」报告，而不是各组各自的非缺失数
+    assert result["groups"]["before"] == 3
+    assert result["groups"]["after"] == 3
 
 
 def test_mannwhitney_reports_median_diff_bootstrap() -> None:

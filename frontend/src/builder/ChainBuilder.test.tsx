@@ -31,6 +31,7 @@ const TOOLS = {
       ],
       charts: ["boxplot", "none"],
       accepts: ["continuous", "ordinal"],
+      group_param: "group_column",
     },
     {
       name: "impute",
@@ -278,5 +279,39 @@ describe("ChainBuilder 原子工具装配", () => {
       expect(body.name).toBe("外来的");
       expect(body.steps).toHaveLength(1);
     });
+  });
+});
+
+describe("ChainBuilder 类型前置提示（对齐执行期校验）", () => {
+  it("类别列误选为目标列时提示，并可一键设为分组列", async () => {
+    await renderBuilder({
+      columns: ["sex", "value"],
+      columnTypes: { sex: "categorical", value: "continuous" },
+    });
+
+    fireEvent.change(screen.getByLabelText("统计工具"), { target: { value: "group_compare" } });
+    fireEvent.click(screen.getByLabelText("sex"));
+
+    const warning = await screen.findByTestId("target-type-warning");
+    expect(warning).toHaveTextContent("sex");
+    expect(warning).toHaveTextContent("分组变量");
+
+    fireEvent.click(screen.getByRole("button", { name: /设为分组列/ }));
+
+    expect(screen.getByLabelText("sex")).not.toBeChecked();
+    expect(screen.getByLabelText("group_column（必填）")).toHaveValue("sex");
+    expect(screen.queryByTestId("target-type-warning")).not.toBeInTheDocument();
+  });
+
+  it("目标列类型合法时不显示提示", async () => {
+    await renderBuilder({
+      columns: ["sex", "value"],
+      columnTypes: { sex: "categorical", value: "continuous" },
+    });
+
+    fireEvent.change(screen.getByLabelText("统计工具"), { target: { value: "group_compare" } });
+    fireEvent.click(screen.getByLabelText("value"));
+
+    expect(screen.queryByTestId("target-type-warning")).not.toBeInTheDocument();
   });
 });

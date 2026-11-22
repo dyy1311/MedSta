@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import shutil
 import sys
 import tempfile
 
@@ -68,6 +69,9 @@ def build_app(data_root: pathlib.Path):
     app.state.service.set_agent(
         DiscussionAgent(request_factory=lambda: _StubRequest())
     )
+    # 桩后端不依赖真实 LLM：开发机存在真实 .env 时，后台解释任务
+    # 会拿真实 InterpretationAgent 打真模型（烧 token），显式置 None
+    app.state.service.set_interpret_agent(None)
     return app
 
 
@@ -77,11 +81,18 @@ def main() -> None:
     parser.add_argument("--data-root", default="")
     args = parser.parse_args()
 
-    root = (
-        pathlib.Path(args.data_root)
-        if args.data_root
-        else pathlib.Path(tempfile.mkdtemp(prefix="medsta-e2e-"))
-    )
+    # 未指定 --data-root 时用临时目录，并在启动时清掉上一轮残留：
+    # Playwright 用 SIGTERM/SIGKILL 停 webServer，atexit 不保证执行，
+    # 只靠退出清理会让 /tmp 累积 medsta-e2e-*（每轮一个会话目录）
+    _temp_root: tempfile.TemporaryDirectory[str] | None = None
+    if args.data_root:
+        root = pathlib.Path(args.data_root)
+    else:
+        for stale in pathlib.Path(tempfile.gettempdir()).glob("medsta-e2e-*"):
+            if stale.is_dir():
+                shutil.rmtree(stale, ignore_errors=True)
+        _temp_root = tempfile.TemporaryDirectory(prefix="medsta-e2e-")
+        root = pathlib.Path(_temp_root.name)
     root.mkdir(parents=True, exist_ok=True)
 
     import uvicorn

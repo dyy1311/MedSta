@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CheckCircle2, ClipboardList, PenLine, Sparkles } from "lucide-react";
-import type { EstimandSpec, PlanOption, PlanStep } from "../types";
+import PlanFlowView from "./PlanFlowView";
+import type { EstimandSpec, PlanFlow, PlanOption, PlanStep } from "../types";
 
 const METHOD_LABELS: Record<string, string> = {
   describe: "描述统计",
@@ -30,6 +31,8 @@ interface Props {
   options: PlanOption[];
   estimand?: EstimandSpec | null;
   sapStatus?: string;
+  /** 047：工作流图（后端 plan_flow 产出；旧后端可能缺省） */
+  flow?: PlanFlow | null;
   confirming: boolean;
   onOption: (optionId: string, content?: string) => void;
 }
@@ -40,6 +43,7 @@ export default function PlanCard({
   options,
   estimand = null,
   sapStatus = "exploratory",
+  flow = null,
   confirming,
   onOption,
 }: Props) {
@@ -65,6 +69,8 @@ export default function PlanCard({
         <span className="text-sm font-semibold text-primary-dark">分析方案</span>
       </div>
       <p className="mb-3 text-sm leading-relaxed text-ink">{message}</p>
+
+      {flow ? <PlanFlowView flow={flow} /> : null}
 
       <div className="mb-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -142,13 +148,16 @@ export default function PlanCard({
                 </span>
               )}
             </span>
-            {step.rationale && (
+            {step.rationale ? (
               <details className="mt-1 w-full">
                 <summary className="cursor-pointer text-[11px] text-primary">选择依据</summary>
                 <p className="mt-1 rounded bg-surface-card/80 p-2 text-[11px] leading-relaxed text-ink-muted">
                   {step.rationale}
                 </p>
               </details>
+            ) : (
+              // 依据缺失不是执行错误（宿主会先自动补一轮），但要让用户知道可以要求补充
+              <span className="mt-1 text-[11px] text-warn">依据未提供（可让它补充说明）</span>
             )}
           </li>
         ))}
@@ -166,7 +175,7 @@ export default function PlanCard({
               }
               onOption(option.id);
             }}
-            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 ${
+            className={`inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 disabled:cursor-wait disabled:opacity-60 ${
               ACTION_STYLE[option.action] ?? ACTION_STYLE.explain
             }`}
           >

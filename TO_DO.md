@@ -7,47 +7,73 @@
 
 | 任务 | 状态 | 说明 |
 |---|---|---|
-| — | 暂无 | 037/038/039 三候选全部完成并归档；后续候选见下方 |
+| — | 暂无 | 审查整改、功能批次 1–13 与上线前终审（前后端 22 项）全部落地（见已完成）；剩余 P2 见下方清单 |
 
 ## 下一步（按「用户可见价值 × 依赖关系 × 成本」排序）
 
-> P0 方法学、032–039（持久化/工作链/模板/重连回放/管道/鉴权/工程质量）全部落地。
-> 基线：后端 457 passed + ruff/mypy 清零、前端 77 passed、CI 三道门（lint/类型/测试）。
+> P0 方法学、032–046（持久化/工作链/模板/重连回放/管道/鉴权/工程质量/报告导出/输入守卫/多用户/上传体验/清洗）全部落地。
+> 基线（2026-11-20 047 工作流编排后）：后端 pytest 全绿（601 passed + 1 skipped 真模型冒烟，覆盖率 90%）+ ruff/mypy 清零、前端 136 passed、E2E 2 passed、CI 五道门（lint/类型/测试/覆盖率/E2E）远端与本地镜像一致。
 
 ### 候选方向（需用户输入优先级）
 
-- 多用户化（会话级鉴权与隔离、在线用户列表）——多人共享部署的下一道门
+- 多用户化二期（在线用户列表、令牌过期与登出）——044 已落地鉴权与隔离
 - 工作链市场（模板共享/评分，依赖多用户）
 - 严格 mypy（disallow_untyped_defs）与前端路由分包
 - E2E 扩展（鉴权开关场景、模板导入导出路径的浏览器级覆盖）
 
-**为什么排第一**：032 已提供快照数据源，断线重连与回放是其自然延伸；
-前端目前断线后消息静默丢弃、界面卡死（审查 H2）。
-
-- 范围：WS 指数退避重连 + 连接状态指示、事件序号与补发（不重复投递）、历史会话回放还原聊天流
-- 验收：断线 10s 内自动重连且不重复投递；回放能还原交付态与消息流
-- 风险：事件序号触及全部事件类型（后端出站 + 前端处理）；聊天消息流需随快照落盘（032 未含）
-
 ### P1 其余精选（按痛点）
 
-- [ ] **会话持久化 + WS 断线重连 + 历史回放**：当前会话仅存内存，重启即丢（内部使用最痛）
-- [ ] 数据清洗层：去重、异常值识别/截尾、标准化、分箱、筛选子集
-- [ ] 上传限额（大小/行数）+ 异步解析（`to_thread`），避免阻塞事件循环
-- [ ] 工作区/会话绑定一致性：上传新表时让用户选择「加入当前工作区 / 新建会话」
+- [x] **测试环境隔离 .env（P1 地雷）**：conftest autouse 夹具强制 `build_gateway` 抛错（`real_llm` 冒烟豁免）+ 模块级 app 惰性化 + E2E 桩 `set_interpret_agent(None)`；`test_env_isolation.py` 两项守护（2026-11-19 批次 7 落地）
+- [x] 执行阶段 WS 收包拆分：`create/start` 拆分 + 后台执行任务 + 句柄关闭移交被取消任务；计算期间 interrupt 实时生效（2026-11-19 批次 8 落地，Agently 源码验证 async_start/async_close 语义）
+- [x] 数据清洗层：去重、异常值识别/截尾、标准化、分箱、筛选子集（2026-11-19 批次 9 / spec 045 落地，六工具 + 注册表 + 链间管道 + dataset_added 注册）
+- [x] 上传行数限额：`MEDSTA_MAX_ROWS`（默认 20 万，可调）→ 400 并清理已写文件（2026-11-19 批次 10 / spec 046）
+- [x] 工作区/会话绑定一致性：已绑定会话再上传统一弹「数据去向」选择——加入当前工作区 / 新建会话 / 取消（2026-11-19 批次 10 / spec 046）
 - [ ] 多重性完整化：Hochberg、gatekeeping、图形法；亚组交互检验
 
-### P2 工程质量
+### P2 工程质量（按审查报告剩余项）
 
-- [ ] `print` → `logging`（16 处），补 request/session id 与 `/metrics`
-- [ ] 前端路由级分包、错误边界、i18n；移除未使用依赖
-- [ ] 后端 `ruff` + `mypy`；数值告警显式处理
-- [ ] OpenAPI/WS 契约自动生成 + `hypothesis` 属性测试
-- [x] CI：pytest + vitest + playwright + 覆盖率门槛 83%（spec 021）
+- [x] login 加固：常数时间比较（`secrets.compare_digest`）与速率限制（同 IP 60s 窗口 5 次失败 → 429，成功清零）（2026-11-19 批次 11）
+- [ ] `RE_EXECUTE` 修正回边决策：生产链路从未触发（仅测试使用）——接线或移除（当前产品语义为 revise→cancel→再讨论，倾向移除死边）
+- [x] **047 重跑正确性两处（2026-11-21）**：`_input_frame` 重放上游 `impute`/清洗的 `_next_frame` 后再跑目标节点（重跑与补图共用）；`_rerun_from` 每个节点结果调用 `_mark_node`，成功清掉过期失败原因
+- [x] `ws.py` RuntimeError 到达留警告日志（业务异常已在 handle 内转错误帧）；`config.py` SSE null delta 显式回退（2026-11-19 批次 11）
+- [x] 计划期条件必填校验：dunnett→control_group（含对照组必须出现在分组列）、cox→covariates、logrank→group_col（2026-11-21，不再拖到运行期 ValueError）
+- [x] 统计边界簇：回归类别自变量点名拒绝、`render_combined` 不足两张图直接拒绝、饼图改用 tab20 不再只给 6 色（2026-11-21）
+- [x] 前端 P2 簇：重连回放与本地 echo 按文案+seq 合并为一条气泡；补绘图按钮连点只发一帧（2026-11-21）。**剩余**：装配器 conditions 参数表单打磨
+- [x] 恢复的审阅态可确认交付（终审：句柄不在内存时按已恢复报告交付，`test_restored_review_can_be_delivered` 守护）
+- [ ] evaluation-report / design-notes 基线刷新（现冻结在 029/030，README 承诺失效；§19 已补终审决策）
+- [ ] 前端路由级分包、i18n；OpenAPI/WS 契约自动生成 + `hypothesis` 属性测试
+- [x] 后端 `ruff` + `mypy` 常态清零（批次 3 起纳入 CI 双门）；`print`→`logging`：服务代码已完成（余 10 处在 launcher.py 属 CLI 终端输出，保留）
+- [x] CI：pytest + vitest + playwright + 覆盖率门槛 83%（spec 021；批次 6 补齐 ruff/mypy 远端双门）
+- [x] 终审一致性（2026-11-19）：工作区激活前后端同源、静态外壳鉴权边界、`.xls` 依赖、任务槽位竞态、删除会话旁路状态、WS 令牌失效不再无限重连——详见 timeline 当日 4 条与 `docs/design-notes.md` §19
+- [x] 残留清理（2026-11-20）：`scripts/clean_sessions.py` 一条命令清空残留会话（在线走 API 保持内存与磁盘一致），E2E 桩后端启动自清 `/tmp/medsta-e2e-*`
 
 ## 已完成
 
 | 任务 | 完成日期 | 产出 |
 |---|---|---|
+| 手册复审对齐 047/048 | 2026-11-20 | `docs/handbook.md` 重写心跳与四章、新增「会话上下文」「推荐流程」「定点修正」「节点级交付」等章节；契约补 `step_result`/`retry_step`/`amend_step`、`plan.flow`、`GET /templates/builtin`、`POST .../chain/match`；前端五维分桶与 `PlanFlowView`/`StepDeliveryCard`；审查发现重跑不重放上游数据产物、未回写上下文两处缺口（已进 P2） |
+| 方案 rationale 自动补全 | 2026-11-20 | 输出契约显式声明 `rationale`/`depends_on`；缺依据时自动补一轮（宿主只合并 rationale）并在补完仍缺时保留硬门；方案卡显示「依据未提供」。后端 585 passed + 1 skipped、前端 129 passed |
+| 多轮图不清除 + 修正后无反应 | 2026-11-20 | 图表只展示最新一轮（历史轮次折叠汇总），统计表按轮次保留；带意见的 revise 自动接续讨论（`back_to_discussion` + 自动重出方案），前端提交即锁定审阅卡；`histogram` + `params.group_by` 支持按类别分面出图。后端 601 passed + 1 skipped、前端 136 passed |
+| 参数驱动目标的工具不再被误拒 | 2026-11-20 | `ToolSpec.target_param` 贯通（校验/目录/规范化重建保留）；`_NO_TARGET_TOOLS` 补 missing_report/aggregate_table；slots 与真实参数名对齐；模板非法 fixed 修正；新增「每条内置模板匹配后逐步骤硬校验」守护。后端 598 passed + 1 skipped、前端 133 passed |
+| 工作链推荐模板 + AI 一键匹配（048） | 2026-11-20 | 5 条按 skills 预设的内置流程；宿主筛候选 + 模型语义选择 + 合法性复核（候选外丢弃）+ 失败回退规则；逐步 `validate_step` 移除不可执行步骤；前端推荐卡一键载入、来源标签、编辑就地替换。后端 595 passed + 1 skipped、前端 133 passed |
+| 统计工作流编排（047） | 2026-11-20 | 流程图方案（`plan_flow` + `PlanFlowView`，节点=工具/边=依赖）；逐节点交付（`step_result`，失败不阻断）；断点续接（`retry_step` 重跑该节点及下游、`amend_step` 模型定点重写）；`SessionContextStore` 按 owner→session 分层；内置 12 条统计 skills（SAMPL/决策树/误用）注入 prompt。前端审计五项收口（isActive 实时化、类型契约、回放空气泡、定时器泄漏、记录旁路化）。后端 581 passed + 1 skipped、前端 129 passed、E2E 2 passed |
+| 目标列 vs 分组列的误用防线 | 2026-11-20 | 校验 hint 给出可执行修法（类别列 → `params.group_column`）；`tool_catalog` 下发 `group_param`，装配器按 `accepts` 实时提示并「一键设为分组列」；错误卡结构化展示 issues；讨论 prompt 明确类别列不得进 `target_columns`。后端 558 passed + 1 skipped、前端 121 passed |
+| 后端日志落盘与「未重启」诊断 | 2026-11-20 | launcher `--log-file`（默认 `logs/dev.log`，追加 + 5MB 轮转）；前端快照 404 顶部横幅提示重启 dev 栈。根因：dev 的 uvicorn 无 `--reload`，09:56 的旧进程没有新路由 `GET /sessions/{sid}/workspace`，新前端持续 404 |
+| 类型确认体验 + 会话同步 + 模块卡折叠 | 2026-11-20 | 「AI 确认类型」加载态（spinner + 说明 + 90s 兜底 + 结果/错误复位）；`PATCH .../columns` 带 `source` 并广播 `type_confirmed`（`SessionService.attach_sender/broadcast` → seq 落事件流 + 在线推送，无连接也能回放），会话区按来源生成可核对文案，采纳后按列消费建议；单列修改改走批量端点（此前不广播）；工作区四块（画像/统计表/结果数据/执行产出）可折叠（默认展开、`aria-expanded`）。后端 553 passed + 1 skipped（`test_type_sync.py` 5 项）、前端 116 passed（`App.typeSync.test.tsx` 5 项）、E2E 2 passed |
+| 教学版产品与实现手册 | 2026-11-20 | `docs/handbook.md`（13 章）：三条铁律、一次会话 20 步心跳、后端启动链与 `SessionService` 账本、Agent 侧 Owner 判据与证据工程、TriggerFlow 句柄时序、注册表校验顺序、前端四维分桶状态与事件映射、契约/错误码速查、四层测试与文档守护、8 个动手实验、排错表、代码地图；README 与 product-guide 补入口并修正过期计数锚点 |
+| 残留会话清理机制 | 2026-11-20 | `scripts/clean_sessions.py`（在线走 API 删内存+磁盘、离线删目录、`--purge-records` 停服后清执行记录、顺带清 `/tmp/medsta-e2e-*`）；E2E 桩后端启动自清旧临时根；**conftest autouse 把无参 `create_app()` 的默认数据根重定向到 tmp**（堵住 9 处用例写真实 `backend/data` 的缺口，`test_default_create_app_writes_into_tmp` 守护）；README 补命令；本次清掉 214 个历史会话目录与 11 个 E2E 临时根，清理后 API/磁盘/tmp 均为 0 |
+| 刷新后工作区与会话区同源 | 2026-11-20 | 新增 `GET /sessions/{sid}/workspace` 快照（画像 + 激活项 + 当前报告，归属 404）；前端进入会话拉快照并与回放幂等合并（`report_id` 去重）；`WorkspaceTab.sessionId` 归属 + 标签/计数按会话过滤 + 无绑定时清空选择；刷新自动回到上次会话（localStorage）；报告先到的占位迁移；`resumed` 按服务端 stage 校正 phase（回放的历史 progress 不再把界面永久卡在「执行中」）。后端 547 passed + 1 skipped、前端 111 passed（`App.hydrate.test.tsx` 4 项）、E2E 补「刷新后左右同源」断言 |
+| 上线前终审（前后端 22 项） | 2026-11-19 | 后端 12 项：静态外壳鉴权放行（prod+鉴权不再白屏）、工作区激活落盘、`chart_config` 每步 charts 白名单 + chart_choice 参数校验、任务槽位身份释放（interrupt 竞态）、删除会话清旁路状态、恢复审阅态可交付、`_jsonify` 归一 np.bool_/NaN/Inf/NaT、导出负数下标拒绝、MEDSTA_MAX_ROWS 兜底、模板导出名校验、plot_later 下标兜底、答疑忙判定顺序；前端 10 项：工作区切换同步后端+回写绑定（消「看新表算旧表」）、多文件拖拽队列、单列类型带 datasetId、直链补 token、出图配置期输入只读、交互卡按会话保留、WS 4401/4403 停止重连回登录卡、chart_error 提示、能力抽屉 a11y+Esc、plan 清过期卡与 key 唯一；依赖补 `xlrd>=2.0`（.xls 真解析 + fixture）；E2E 2 处定位/文案修正。后端 544 passed + 1 skipped（覆盖率 90%）、前端 107 passed、E2E 2 passed、ruff/mypy 清零 |
+| 批量清理重复会话（批次 13） | 2026-11-19 | `POST /sessions/cleanup_duplicates`（按绑定文件名分组保留最新〔快照 mtime〕，未绑定/执行中跳过，deleted/kept/skipped 返回）；鉴权中间件集合级动作白名单（曾按 session_id 归属误判 404）；`SessionStore.mtime`；前端「清理重复」按钮（confirm + 结果横幅 + 活跃切换）；后端 534 passed + 1 skipped、前端 101 passed |
+| 会话删除（批次 12） | 2026-11-19 | `DELETE /sessions/{sid}`（归属校验 + async + 工作流协程取消）；`SessionStore.delete` rmtree 会话目录（快照/数据/事件流/产物）；前端标签「×」删除按钮（confirm 防误删、活跃切换、本地状态清理）；REST/组件/多用户归属三组测试；后端 532 passed + 1 skipped、前端 99 passed |
+| 生产加固 + 上线收尾评估（批次 11） | 2026-11-19 | login 常数时间比较 + 60s 窗限速（429）；SSE null delta 回退；强制 log_normal 正性门；type_confirm 半更新防护；chi_square params-only 豁免；ws RuntimeError 留痕；`evaluation-report.md` 046 基线补记 + §7 生产就绪度评估；`design-notes.md` §18 决策补记；后端 530 passed + 1 skipped、覆盖率 90% |
+| 上传体验：行数限额 + 数据去向选择（批次 10，spec 046） | 2026-11-19 | 上传行数上限 `MEDSTA_MAX_ROWS`（默认 20 万，400 并清理文件）；已绑定会话三入口（chat「+」/工作区「+」/拖拽）统一弹 `UploadChoiceDialog`（加入当前工作区 / 新建会话 / 取消）；`handleUpload` target 化（显式目标不再强制新建）；后端 524 passed + 1 skipped、前端 96 passed |
+| 数据清洗层（批次 9，spec 045） | 2026-11-19 | `stats/cleaning.py` 六工具（dedupe/filter_rows/standardize/bin_column/outlier_report/winsorize）；注册表「数据清洗」类目 + MethodType/JSON 采样/METHOD_NOTES/附录 A（28）/tools.md/product-guide 全链同步；cleaned_step_{i}.csv 产物 + `_next_frame` 链间管道 + service 注册（dataset_added imputed=false）；21 项新测试，后端 523 passed + 1 skipped、前端 95 passed |
+| 执行阶段 WS 收包拆分（批次 8，P1） | 2026-11-19 | `AnalysisWorkflow.create/start` 拆分（run 保留兼容）；`_execution_task` 后台驱动执行至审阅；计算期间 interrupt/chat 实时处理（此前 handler 阻塞、中断名存实亡）；句柄关闭移交被取消任务后台路径（Agenty `async_close` drain 计算线程不阻塞 WS）；accept/revise 取消后台任务 + 启动即 accept 竞态 NO_ACTIVE_RUN；run_chain 执行期门控；新增 `test_interrupt_during_compute_is_immediate` 守护；服务级测试 12 处对齐异步契约 |
+| 测试环境隔离 .env（批次 7，P1 地雷 + 同域 P2） | 2026-11-19 | conftest autouse 夹具 `_no_real_gateway`（补丁 `medsta.config.build_gateway`，real_llm 冒烟豁免）；`medsta/app.py` 模块级 app 惰性构建（PEP 562，uvicorn 目标不变）；test_app/test_chart_flow 内嵌 `create_app()` 全部改传 tmp_path 数据根；E2E 桩 `set_interpret_agent(None)`；新增 `test_env_isolation.py` 两项守护（B1 任意环境确定性 RED→GREEN、B2 惰性行为） |
+| 全项目 Agently 审查整改（六批次，RED→GREEN 逐项） | 2026-11-19 | 批次 1 P0×6（busy 泄漏/执行期 chat 门控/resume 降级/插补工作区/vite 代理/配对错位）；批次 2 状态守卫族（异常 teardown、accept+revise 清句柄、中断帧唯一）；批次 3 阻塞 IO×5 + EventLog 追加写与原子轮转；批次 4 统计口径×5（McNemar 语义/中位生存期阶梯/ORDINAL_HINT/GBK 回退/插补真实路径）；批次 5 前端契约×5（per-session 事件落地/首连回放/createSession 抛错/图表枚举/`?token=` 直链）；批次 6 治理（ci.yml 对齐 ci.sh、B8/B9 文档断言、storage 空壳删除、pipline.md 归档、chartOptions 拆分）；后端 ruff/mypy 清零、前端 95 passed、文档守护 11 项全绿 |
+| 全项目 Agently 审查 + 架构图对齐 032–044 | 2026-11-19 | 审查报告（后端编排 / 统计数据 / 前端 / 文档 CI 四线问题清单与分级整改建议）；`docs/architecture.md` 三图重绘 + 所有权与不变量账本 + 附录 B 事件/状态表修正 |
+| 034–044 十一个 spec（模板/重连回放/链间管道/单令牌鉴权/工程质量/报告导出/AI 列类型/拖拽导入/输入守卫/多用户化/实测五修） | 2026-11-16~18 | 逐条详见 `docs/timeline.md`；基线后端 485 passed、前端 88 passed |
 | 原子统计工作链（033，产品定位调整） | 2026-11-16 | WS `run_chain` 手动装配通道（validate_plan 硬校验/跳过出图确认/零模型可执行/交付态可装配）；前端「工具装配」Tab（分类选工具+动态参数表单+工作链编辑+方案导入）；JSON 输出硬门（22 工具逐个采样 allow_nan=False + 覆盖性守护）；`format=json` 表格导出与图 JPG/PDF/TIF 导出；`docs/tools.md` 登记+一致性守护；前端 JSON/多格式下载；后端 423 passed、前端 57 passed |
 | 会话持久化（032）+ 三处顺手修 | 2026-11-16 | `SessionStore` JSON+原子写、6 个落盘点、启动恢复（列类型重放）、resume 还原审阅/交付态、executing 降级；落盘先于送达；历史报告 report_id 寻址导出（前后端）；文本列改数值 to_numeric 兜底（S5）；图表失败与统计隔离（E1）；后端 393 passed、前端 53 passed |
 | P0/P1 审查修复批 | 2026-10-24 | 统计正确性七处（Breslow w²、RMST 组间 tau、McNemar 分类豁免、AUC 平均秩、配对 bootstrap 差值重抽样、Fisher 路径 Cramér's V、卡方星号顺序）；SPA 路径穿越（resolve 前缀校验）、导出公式注入转义、上传 50MB 限额；状态机转移表 + SESSION_BUSY 忙锁 + WS 错误帧兜底 + 执行 to_thread 化 + 审阅超时语义；matplotlib>=3.9；前端 estimand 透传；后端 382 passed、前端 52 passed |
@@ -85,7 +111,7 @@
 - 估计目标（Estimand）仅展示与状态标注：SAP 摘要导出、事前注册、盲态与样本量论证未实现；五要素文本不做与数据列的语义校验。
 - 多重性目前覆盖 SNK/Tukey/Dunnett/LSD/Schéffé/Holm/Bonferroni；Hochberg、gatekeeping、图形法与期中 α 消耗未实现。
 - 聊天消息流已可完整回放（036：用户动作帧落盘+回放）；事件日志轮转为保留尾部一半的简单策略。
-- 上传已有 50MB 大小限额（超限 413）；行数限额与异步解析（`to_thread`）未实现，解析仍在主事件循环同步执行。
+- 上传已有 50MB 大小限额（超限 413）和行数限额 `MEDSTA_MAX_ROWS`（默认 20 万，超限 400 并删除已写文件）。上传路由是同步 `def`，由 FastAPI 放进线程池，不占事件循环。
 - 结果解读为单轮生成：不支持重新生成、不支持跨多次交付的多轮答疑记忆；解读文字质量依赖真实模型（CI 仅验证契约与守卫）。
 - Logistic 分离目前「拒绝输出」，未提供 Firth 惩罚回归；共线性仅通过系数/收敛间接暴露。
 - 分支保护（要求 CI 必过才能合并）需在 GitHub 仓库设置中手动开启；CI 不接入真实模型，`real_llm` 保持默认 skip。

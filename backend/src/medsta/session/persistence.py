@@ -60,3 +60,20 @@ class SessionStore:
             if isinstance(payload, dict) and payload.get("session_id"):
                 snapshots.append(payload)
         return snapshots
+
+    def delete(self, session_id: str) -> bool:
+        """删除会话全部磁盘痕迹：快照 + 数据文件 + 事件流 + 图表产物（批次12）。"""
+        import shutil
+
+        target = self._root / session_id
+        if not target.is_dir():
+            return False
+        shutil.rmtree(target, ignore_errors=True)
+        return True
+
+    def mtime(self, session_id: str) -> int:
+        """快照修改时间（ns）；无快照返回 0。用于批量清理的「保留最新」排序（批次13）。"""
+        try:
+            return (self._root / session_id / "snapshot.json").stat().st_mtime_ns
+        except OSError:
+            return 0

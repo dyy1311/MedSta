@@ -10,6 +10,8 @@ interface Props {
   artifactBase: string;
   onAccept: () => void;
   onRevise: (note: string) => void;
+  /** 修正意见已提交：锁定交互，等待模型按修正重出方案 */
+  submitted?: boolean;
   /** 点击「前往工作区」时切换 Tab（041 修复：链接此前无实际行为） */
   onGoWorkspace?: () => void;
 }
@@ -67,6 +69,7 @@ export default function ReviewCard({
   artifactBase,
   onAccept,
   onRevise,
+  submitted = false,
   onGoWorkspace,
 }: Props) {
   const [revising, setRevising] = useState(false);
@@ -134,7 +137,12 @@ export default function ReviewCard({
                 已生成统计表格（{step.table.rows.length} 行）→ 点击前往「工作区」查看与导出报告
               </button>
             ) : null}
-            <StrategyPanel result={step.result} />
+            {!step.artifact && typeof step.result?.chart_error === "string" && (
+              <p className="mt-1 text-[11px] leading-relaxed text-warn">
+                统计结果已生成，但图表渲染失败：{step.result.chart_error}
+              </p>
+            )}
+            <StrategyPanel result={step.result ?? {}} />
             {typeof step.result?.method_note === "string" && step.result.method_note.trim() ? (
               <MethodNote note={step.result.method_note} />
             ) : null}
@@ -171,7 +179,11 @@ export default function ReviewCard({
         </ul>
       )}
 
-      {delivered ? (
+      {submitted ? (
+        <p data-testid="review-submitted" className="text-xs text-ink-muted">
+          修正意见已提交，正在按修正重新生成方案…
+        </p>
+      ) : delivered ? (
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-xs text-ink-muted">
             结果已交付。可直接在下方提问，或回到方案调整。
@@ -204,7 +216,7 @@ export default function ReviewCard({
         <div className="flex gap-2">
           <button
             onClick={onAccept}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-ok px-3 py-2 text-sm font-medium text-white transition-all hover:brightness-105 active:scale-[0.98]"
+            className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg bg-ok px-3 py-2 text-sm font-medium text-white transition-colors duration-200 hover:brightness-105"
           >
             <CheckCheck className="h-4 w-4" />
             确认交付

@@ -78,6 +78,7 @@ async def test_chart_choice_applies_overrides_and_executes(service) -> None:
          "alpha": 0.01, "correction": "holm"},
         send,
     )
+    await service.wait_idle(sid)  # 执行后台驱动，等待审阅请求
     review = [m for m in sent if m["type"] == "review_request"]
     assert review
     step = review[0]["report"]["steps"][0]
@@ -111,7 +112,7 @@ async def test_shared_layout_renders_combined(tmp_path) -> None:
     assert (artifacts_dir / "charts_combined.png").exists()
 
 
-async def test_export_csv_and_xlsx(service) -> None:
+async def test_export_csv_and_xlsx(service, tmp_path) -> None:
     """B5: /export 导出 csv 与 xlsx"""
     from fastapi.testclient import TestClient
 
@@ -121,8 +122,9 @@ async def test_export_csv_and_xlsx(service) -> None:
     await service.wait_idle(sid)
     await service.handle(sid, {"type": "confirm_plan"}, send)
     await service.handle(sid, {"type": "chart_choice", "use_default": True}, send)
+    await service.wait_idle(sid)  # 执行后台驱动，等待报告落位后再导出
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(data_root=tmp_path / "sessions"))
     client.app.state.service = service  # type: ignore[attr-defined]
     resp = client.get(f"/export/{sid}/0?format=csv")
     assert resp.status_code == 200 and "text/csv" in resp.headers["content-type"]
@@ -130,3 +132,61 @@ async def test_export_csv_and_xlsx(service) -> None:
     assert resp.status_code == 200 and "spreadsheetml" in resp.headers["content-type"]
     resp = client.get(f"/export/{sid}/0?format=xml")
     assert resp.status_code == 400
+
+
+async def test_chart_config_exposes_tool_supported_charts(service) -> None:
+    """终审修复: chart_config 每步带 charts 白名单（前端只列可选图，避免渲染失败）。"""
+    service, sid = service
+    sent, send = _collector()
+    await service.handle(sid, {"type": "chat", "content": "比较两组"}, send)
+    await service.wait_idle(sid)
+    await service.handle(sid, {"type": "confirm_plan"}, send)
+
+    config = [m for m in sent if m["type"] == "chart_config"][0]
+    assert config["steps"][0]["charts"] == ["boxplot", "violin"]
+    assert "none" not in config["steps"][0]["charts"]
+
+
+async def test_chart_choice_unsupported_chart_falls_back(service) -> None:
+    """终审修复: 选了本工具不支持的图 → 降级为该工具首个可用图，不中断执行。"""
+    service, sid = service
+    sent, send = _collector()
+    await service.handle(sid, {"type": "chat", "content": "比较两组"}, send)
+    await service.wait_idle(sid)
+    await service.handle(sid, {"type": "confirm_plan"}, send)
+    await service.handle(
+        sid,
+        {"type": "chart_choice",
+         "choices": [{"step_id": "step_1", "chart_type": "survival_curve"}],
+         "alpha": 0.01, "correction": "holm"},
+        send,
+    )
+    await service.wait_idle(sid)
+
+    review = [m for m in sent if m["type"] == "review_request"]
+    assert review, [m.get("type") for m in sent]
+    step = review[0]["report"]["steps"][0]
+    assert step["artifact"] and "survival_curve" not in step["artifact"]
+
+
+async def test_chart_choice_tolerates_malformed_payload(service) -> None:
+    """终审修复: alpha 非数值 / layout 非法值不得让会话崩溃（宿主兜底）。"""
+    service, sid = service
+    sent, send = _collector()
+    await service.handle(sid, {"type": "chat", "content": "比较两组"}, send)
+    await service.wait_idle(sid)
+    await service.handle(sid, {"type": "confirm_plan"}, send)
+    await service.handle(
+        sid,
+        {"type": "chart_choice", "choices": "not-a-list", "alpha": "abc",
+         "layout": "weird", "correction": "bogus"},
+        send,
+    )
+    await service.wait_idle(sid)
+
+    errors = [m for m in sent if m["type"] == "error"]
+    assert not errors, errors
+    review = [m for m in sent if m["type"] == "review_request"]
+    assert review
+    result = review[0]["report"]["steps"][0]["result"]
+    assert result["alpha"] == 0.05

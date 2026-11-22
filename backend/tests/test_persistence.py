@@ -204,3 +204,79 @@ def test_report_and_delivery_restored(tmp_path) -> None:
         assert redelivered["report"]["steps"][0]["method"] == "describe"
     # 报告恢复后导出可用
     assert restarted.get(f"/export/{session_id}/0?format=csv").status_code == 200
+
+
+def test_workspace_activation_persists(tmp_path) -> None:
+    """终审修复: REST 激活工作区也要落盘，重启后 active_dataset_id 不回落。"""
+    client, session_id, root = _setup(tmp_path)
+    first = upload_csv(client, session_id)["dataset_id"]
+    second = upload_csv(client, session_id, b"bp,weight\n120,60\n130,65\n", "second.csv")["dataset_id"]
+
+    resp = client.post(f"/sessions/{session_id}/workspace/{second}/activate")
+    assert resp.status_code == 200
+
+    snapshot = _wait_snapshot(
+        root, session_id, lambda snap: snap.get("active_dataset_id") == second
+    )
+    assert snapshot["active_dataset_id"] == second
+
+    manager.clear()
+    TestClient(create_app(data_root=root))
+    session = manager.get(session_id)
+    assert session is not None
+    assert session.active_dataset_id == second
+    assert session.datasets[second].name == "second.csv"
+    assert first in session.datasets
+
+
+def test_restored_review_can_be_delivered(tmp_path) -> None:
+    """终审修复: 重启恢复的审阅态可以确认交付（此前只能重看，点交付必撞 NO_ACTIVE_RUN）。"""
+    client, session_id, root = _setup(tmp_path)
+    client.app.state.service.set_agent(fake_agent(PLAN_TABLE_ONLY))
+    upload_csv(client, session_id)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)  # 产生报告并落盘，但未交付
+
+    manager.clear()  # 模拟进程重启：执行句柄消失，报告从快照恢复
+    restarted = TestClient(create_app(data_root=root))
+    with restarted.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_json({"type": "resume"})
+        collect_until(ws, {"review_request"})
+        ws.send_json({"type": "review", "decision": "accept"})
+        _, delivered = collect_until(ws, {"delivered"})
+        assert delivered["report"]["steps"][0]["method"] == "describe"
+
+    assert manager.get(session_id).status.value == "delivered"
+    snapshot = _wait_snapshot(root, session_id, lambda s: s["status"] == "delivered")
+    assert snapshot["status"] == "delivered"
+
+
+def test_workspace_snapshot_endpoint(tmp_path) -> None:
+    """刷新后右栏同源：GET /sessions/{sid}/workspace 返回画像/激活项/当前报告。"""
+    client, session_id, root = _setup(tmp_path)
+    client.app.state.service.set_agent(fake_agent(PLAN_TABLE_ONLY))
+    upload_csv(client, session_id)
+
+    empty = client.get(f"/sessions/{session_id}/workspace").json()
+    assert empty["session_id"] == session_id
+    assert empty["status"] == "discussing"
+    assert len(empty["datasets"]) == 1
+    dataset = empty["datasets"][0]
+    assert dataset["active"] is not False  # 激活项由 active_dataset_id 表达
+    assert dataset["profile"]["row_count"] > 0
+    assert empty["active_dataset_id"] == dataset["dataset_id"]
+    assert empty["report"] is None
+
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)
+
+    with_report = client.get(f"/sessions/{session_id}/workspace").json()
+    assert with_report["report"] is not None
+    assert with_report["report_id"] == with_report["report"]["report_id"]
+    assert with_report["report"]["steps"][0]["method"] == "describe"
+
+
+def test_workspace_snapshot_unknown_session_404(tmp_path) -> None:
+    """未知会话返回 404（而非 500）。"""
+    client, _, _ = _setup(tmp_path)
+    assert client.get("/sessions/nope/workspace").status_code == 404

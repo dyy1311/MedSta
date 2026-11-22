@@ -36,7 +36,8 @@ python main.py --prod
 | 文档 | 读它了解什么 |
 |---|---|
 | [产品说明](docs/product-guide.md) | 定位、目标用户、能力矩阵、交互旅程、交付物与边界 |
-| [系统架构与统计流程](docs/architecture.md) | 三张图：分层架构、统计策略选择、执行流程；22 个工具清单 |
+| [产品与实现讲解手册](docs/handbook.md) | 教学版全链路：心智模型、前后端调用链、Agent 编排、契约速查、动手实验与排错 |
+| [系统架构与统计流程](docs/architecture.md) | 三张图：分层架构、统计策略选择、执行流程；工具清单与事件/状态对照 |
 | [统计说明](docs/statistics-methods.md) | 每个方法的检验策略链、教材口径、外部标准与解读禁忌 |
 | [评估基线](docs/evaluation-report.md) | 评分、测试资产、已修缺陷、剩余缺口与下一步 |
 | [设计决策](docs/design-notes.md) | 关键取舍与踩过的坑（为什么这么设计） |
@@ -57,6 +58,9 @@ cd frontend && npm run test:e2e
 
 # 本地等价 CI（后端 + 前端 + E2E）
 bash scripts/ci.sh
+
+# 清理测试/手工操作留下的会话（服务在线走 API 删内存+磁盘，否则直接删目录）
+python scripts/clean_sessions.py
 ```
 
 推送 `main` 或提交 PR 时，GitHub Actions 自动运行后端（含覆盖率门槛）、前端、E2E 三个作业。

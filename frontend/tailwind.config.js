@@ -5,36 +5,36 @@ export default {
     extend: {
       colors: {
         primary: {
-          DEFAULT: "#3B5BDB",
-          dark: "#1E2A5A",
-          hover: "#3350C4",
-          soft: "#E6EBFB",
-          cyan: "#22B8CF",
+          DEFAULT: "#0E7490",
+          dark: "#164E63",
+          hover: "#155E75",
+          soft: "#ECFEFF",
+          cyan: "#0891B2",
         },
         surface: {
-          page: "#F6F7FA",
+          page: "#F3F7F6",
           card: "#FFFFFF",
-          raised: "#FBFBFD",
+          raised: "#F8FBFA",
         },
         ink: {
-          DEFAULT: "#1A1D2B",
-          muted: "#6B7280",
-          faint: "#9AA1B0",
+          DEFAULT: "#164E63",
+          muted: "#3F5E6B",
+          faint: "#5F7C88",
         },
-        ok: "#2F9E44",
-        danger: "#E03131",
-        warn: "#F08C00",
+        ok: "#047857",
+        danger: "#B91C1C",
+        warn: "#C2410C",
       },
       fontFamily: {
         sans: [
+          "Figtree",
+          "'Noto Sans SC'",
           "'PingFang SC'",
-          "'HarmonyOS Sans SC'",
+          "'Noto Sans CJK SC'",
           "'Microsoft YaHei'",
-          "system-ui",
           "sans-serif",
         ],
-        // 数字与西文展示字体（统计工具的排印核心：等宽数字 + 工程感字标）
-        display: ["'Space Grotesk'", "'PingFang SC'", "'Microsoft YaHei'", "sans-serif"],
+        display: ["Figtree", "'Noto Sans SC'", "'PingFang SC'", "'Microsoft YaHei'", "sans-serif"],
       },
       letterSpacing: {
         tightest: "-0.02em",

@@ -283,6 +283,10 @@ def compute_reference_range(
             {"lower": _round_or_none(lower), "upper": _round_or_none(upper), "z_value": round(z_value, 4)}
         )
     elif resolved == "log_normal":
+        # 强制对数正态法时必须显式拒绝非正值：np.log 产生的 NaN 会静默
+        # 传播到 lower/upper，威胁「严格 JSON」出口契约（批次11；auto 路径原有正性门）
+        if not bool(np.all(data > 0)):
+            raise ValueError("对数正态法要求数据全部为正；含 0 或负值请改用百分位数法")
         log_values = np.log(data)
         lower, upper, z_value = _normal_bounds(
             float(log_values.mean()),

@@ -50,6 +50,15 @@ async def session_ws(websocket: WebSocket, session_id: str) -> None:
             await websocket.send_json(frame)
             logger.info("ws sent %s (seq=%s)", frame.get("type"), frame.get("seq"))
 
+    async def send_frame(frame: dict) -> None:
+        """发送已分配 seq 的帧（service.broadcast 用：REST 变更也要即时到达前端）。"""
+        async with send_lock:
+            await websocket.send_json(frame)
+            logger.info("ws sent %s (seq=%s)", frame.get("type"), frame.get("seq"))
+
+    # 注册到会话：REST 侧（列类型修改等）经 service.broadcast 推给本连接
+    service.attach_sender(session_id, send_frame)
+
     try:
         while True:
             try:
@@ -100,6 +109,12 @@ async def session_ws(websocket: WebSocket, session_id: str) -> None:
                         detail=str(exc)[:200],
                     ).to_event()
                 )
-    except (WebSocketDisconnect, RuntimeError):
-        # 客户端断连，或对已断开的连接写帧：正常结束会话循环
+    except (WebSocketDisconnect, RuntimeError) as exc:
+        # WebSocketDisconnect=客户端主动断连；RuntimeError=starlette 对已关闭
+        # 连接写帧的抛错。业务异常已在 handle() 内转为 error 帧，不会到这里；
+        # RuntimeError 到达属异常路径，留警告日志便于生产排查（批次11）
+        if not isinstance(exc, WebSocketDisconnect):
+            logger.warning("ws loop ended by RuntimeError: %s", exc)
         return
+    finally:
+        service.detach_sender(session_id, send_frame)

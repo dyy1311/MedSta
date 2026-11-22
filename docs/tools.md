@@ -16,6 +16,12 @@
 | `one_sample_test` | 单样本检验 | 组间比较 | 关联 | histogram / boxplot | 样本均数与已知总体均数 μ0 比较；需提供 μ0，单双侧须分析前确定 |
 | `missing_report` | 缺失数据报告 | 描述与质检 | 描述 | — | 任何数据接入后必做：用于缺失机制判定（MCAR/MAR/MNAR）与数据契约确认 |
 | `impute` | 缺失值插补 | 描述与质检 | 描述 | — | 缺失处理：先诊断模式与机制提示，再决定完整病例/MICE/敏感性分析；单数据集插补不等于多重插补 |
+| `dedupe` | 重复行去重 | 数据清洗 | 清洗 | — | 整行或按指定列判重（keep=first/last）；有重复时产出清洗数据集供继续分析 |
+| `filter_rows` | 按条件筛选行 | 数据清洗 | 清洗 | — | conditions 多条件 AND 取子集（eq/ne/gt/ge/lt/le/between/in/isna/notna）；筛后 0 行显式拒绝 |
+| `standardize` | 标准化 | 数据清洗 | 清洗 | — | z-score / min-max 列内变换（列名不变）；产出清洗数据集 |
+| `bin_column` | 连续变量分箱 | 数据清洗 | 清洗 | — | 等频/等宽分箱为等级变量（新增 {col}_bin，整数箱号 1..k）；产出清洗数据集 |
+| `outlier_report` | 异常值识别 | 数据清洗 | 清洗 | — | IQR 法（k 可调，默认 1.5）或 z-score 3σ 逐列识别；仅报告不改动数据 |
+| `winsorize` | 异常值截尾 | 数据清洗 | 清洗 | — | 界外值截到边界（IQR 法或百分位法 1%/99%）；产出清洗数据集 |
 | `normality_test` | 正态性检验 | 描述与质检 | 描述 | qq_plot / histogram | 参数/非参数方法选择的前置检验；n<3 或 n>5000 时结论需谨慎 |
 | `group_compare` | 两组比较 | 组间比较 | 关联 | boxplot / violin | 两组独立/配对连续样本的均值差异；分组列至少 2 组且每组建议 n≥3 |
 | `anova` | 多组比较 | 组间比较 | 关联 | boxplot / grouped_bar / violin | 三组及以上连续样本的组间差异；需分组列且各组建议 n≥3 |
