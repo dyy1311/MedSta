@@ -44,6 +44,13 @@ describe("WorkspacePanel", () => {
     expect(screen.getByText("图表交付（1）")).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "调整导入表格与图表交付高度" })).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "调整图表交付与表格区域高度" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "收起导入表格" }));
+    expect(screen.queryByText("数据画像")).not.toBeInTheDocument();
+    expect(screen.getAllByText("导入表格").length).toBeGreaterThan(0);
+    expect(screen.getByText("图表交付（1）")).toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: "调整导入表格与图表交付高度" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开导入表格" }));
+    expect(screen.getByText("数据画像")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "CSV" })).toHaveAttribute(
       "href",
       "/export/s1/0?format=csv"
@@ -79,7 +86,7 @@ describe("WorkspacePanel", () => {
       <WorkspacePanel {...baseProps} onUpload={onUpload} workspaces={[]} />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /导入表格/ }));
+    fireEvent.click(screen.getByRole("button", { name: "导入表格" }));
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(["a"], "new.csv")] } });
 

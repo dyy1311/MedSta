@@ -39,15 +39,17 @@ function reportQuery(report: ExecutionReport): string {
   return report.report_id ? `&report_id=${report.report_id}` : "";
 }
 
-/** 模块卡折叠按钮（标题行右侧）：折叠后只留标题，结果默认可见优先 */
+/** 模块卡 / 分栏折叠：折叠后只留标题，展开块均分中间剩余高度 */
 function CollapseToggle({
   collapsed,
   label,
   onToggle,
+  className = "ml-auto",
 }: {
   collapsed: boolean;
   label: string;
   onToggle: () => void;
+  className?: string;
 }) {
   return (
     <button
@@ -55,7 +57,7 @@ function CollapseToggle({
       onClick={onToggle}
       aria-expanded={!collapsed}
       aria-label={collapsed ? `展开${label}` : `收起${label}`}
-      className="ml-auto cursor-pointer rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface-page hover:text-ink"
+      className={`cursor-pointer rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface-page hover:text-ink ${className}`}
     >
       <ChevronDown
         className={`h-4 w-4 transition-transform ${collapsed ? "-rotate-90" : ""}`}
@@ -63,6 +65,8 @@ function CollapseToggle({
     </button>
   );
 }
+
+type PaneId = "import" | "chart" | "table";
 
 interface Props {
   sessionId: string;
@@ -126,10 +130,20 @@ export default function WorkspacePanel({
     chartH: number;
     tableH: number;
   } | null>(null);
-  // 模块卡折叠：画像/统计表/图表各自独立，默认展开（结果默认可见优先于省空间）
+  // 模块卡折叠：画像/统计表/结果各自独立，默认展开
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggleSection = (key: string) =>
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  // 三栏共享中间区域：收起只留标题，展开的均分剩余高度
+  const [folded, setFolded] = useState<Record<PaneId, boolean>>({
+    import: false,
+    chart: false,
+    table: false,
+  });
+  const toggleFold = (id: PaneId) => {
+    setFolded((prev) => ({ ...prev, [id]: !prev[id] }));
+    setPaneH(null);
+  };
   const active = workspaces.find((workspace) => workspace.datasetId === activeId) ?? workspaces[0];
   const reports = active?.reports ?? [];
   // 统计表按轮次保留（可对照前后两次执行）
@@ -214,6 +228,8 @@ export default function WorkspacePanel({
   }, [hasTables]);
 
   const startPaneDrag = (kind: "import" | "chart") => (event: ReactPointerEvent) => {
+    if (kind === "import" && (folded.import || folded.chart)) return;
+    if (kind === "chart" && (folded.chart || folded.table)) return;
     const root = splitRootRef.current;
     if (!root) return;
     const importEl = root.querySelector("[data-split-pane='import']");
@@ -228,8 +244,15 @@ export default function WorkspacePanel({
     event.preventDefault();
   };
 
-  const paneStyle = (height: number | undefined) =>
-    height != null ? ({ height, flex: "0 0 auto" } as const) : undefined;
+  const paneStyle = (id: PaneId, height: number | undefined) => {
+    if (folded[id]) return { flex: "0 0 auto", height: "auto" } as const;
+    if (height != null) return { height, flex: "0 0 auto" } as const;
+    return undefined;
+  };
+  const paneClass = (id: PaneId) =>
+    folded[id]
+      ? "flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden"
+      : "flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden";
 
   return (
     <div className="flex h-full min-h-0 flex-col break-words">
@@ -309,12 +332,20 @@ export default function WorkspacePanel({
       <div ref={splitRootRef} className="flex min-h-0 flex-1 flex-col">
         <section
           data-split-pane="import"
-          style={paneStyle(paneH?.importH)}
-          className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+          style={paneStyle("import", paneH?.importH)}
+          className={paneClass("import")}
         >
-          <div className="shrink-0 border-b border-ink/8 px-3 py-1.5 text-xs font-medium text-primary-dark">
-            导入表格
+          <div className="flex shrink-0 items-center gap-2 border-b border-ink/8 px-3 py-1.5">
+            <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
+              导入表格
+            </span>
+            <CollapseToggle
+              collapsed={folded.import}
+              label="导入表格"
+              onToggle={() => toggleFold("import")}
+            />
           </div>
+          {!folded.import && (
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {!active ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-ink-muted">
@@ -349,17 +380,20 @@ export default function WorkspacePanel({
           </>
         )}
           </div>
+          )}
         </section>
+        {!folded.import && !folded.chart && (
         <ResizeHandle
           orientation="horizontal"
           testId="split-import-chart"
           onPointerDown={startPaneDrag("import")}
           label="调整导入表格与图表交付高度"
         />
+        )}
         <section
           data-split-pane="chart"
-          style={paneStyle(paneH?.chartH)}
-          className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+          style={paneStyle("chart", paneH?.chartH)}
+          className={paneClass("chart")}
         >
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ink/8 px-3 py-1.5">
             <BarChart3 className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
@@ -368,8 +402,9 @@ export default function WorkspacePanel({
               {charts.length > 0 ? `（${charts.length}）` : ""}
               {reports.length > 1 ? ` · ${reports.length} 轮` : ""}
             </span>
+            <span className="ml-auto flex flex-wrap items-center gap-1.5 text-xs">
             {reports.length > 0 && (
-              <span className="ml-auto flex flex-wrap items-center gap-1.5 text-xs">
+              <>
                 <select
                   aria-label="报告风格"
                   value={reportStyle}
@@ -395,9 +430,17 @@ export default function WorkspacePanel({
                 >
                   导出报告
                 </a>
-              </span>
+              </>
             )}
+            <CollapseToggle
+              className="shrink-0"
+              collapsed={folded.chart}
+              label="图表交付"
+              onToggle={() => toggleFold("chart")}
+            />
+            </span>
           </div>
+          {!folded.chart && (
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {charts.length === 0 && (
               <p className="text-sm leading-relaxed text-ink-muted">
@@ -431,19 +474,22 @@ export default function WorkspacePanel({
               </div>
             )}
           </div>
+          )}
         </section>
         {hasTables && (
           <>
+            {!folded.chart && !folded.table && (
             <ResizeHandle
               orientation="horizontal"
               testId="split-chart-table"
               onPointerDown={startPaneDrag("chart")}
               label="调整图表交付与表格区域高度"
             />
+            )}
             <section
               data-split-pane="table"
-              style={paneStyle(paneH?.tableH)}
-              className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+              style={paneStyle("table", paneH?.tableH)}
+              className={paneClass("table")}
             >
               <div className="flex shrink-0 items-center gap-2 border-b border-ink/8 px-3 py-1.5">
                 <FileSpreadsheet className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
@@ -451,7 +497,13 @@ export default function WorkspacePanel({
                   表格
                   {`（${tableSteps.length + resultOnlySteps.length}）`}
                 </span>
+                <CollapseToggle
+                  collapsed={folded.table}
+                  label="表格"
+                  onToggle={() => toggleFold("table")}
+                />
               </div>
+              {!folded.table && (
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {tableSteps.length > 0 && (
               <div data-testid="table-delivery">
@@ -577,6 +629,7 @@ export default function WorkspacePanel({
               </div>
             )}
               </div>
+              )}
             </section>
           </>
         )}
