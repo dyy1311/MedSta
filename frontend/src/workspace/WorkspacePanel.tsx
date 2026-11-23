@@ -1,12 +1,17 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { BarChart3, ChevronDown, CloudUpload, Eraser, FileSpreadsheet, Inbox, Plus } from "lucide-react";
 import type { ExecutionReport, PlotStyle, ReportStep, WorkspaceTab } from "../types";
 import { withToken } from "../api/client";
 import { CHART_OPTIONS } from "../chat/chartOptions";
 import ClearOutputsDialog from "../components/ClearOutputsDialog";
+import ResizeHandle from "../components/ResizeHandle";
 import ProfileTable from "./ProfileTable";
 import ChartCard from "./ChartCard";
 import ResultTable from "./ResultTable";
+
+/** 上下分栏最小高度，避免拖成一条缝 */
+const MIN_PANE = 96;
 
 /** 产物文件名 step_{n}_{method}_{chart}.png 与注册表同源，用来回填出图后修改标注 */
 const ARTIFACT_CHARTS = CHART_OPTIONS
@@ -106,9 +111,21 @@ export default function WorkspacePanel({
   onRestyleChart,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const splitRootRef = useRef<HTMLDivElement>(null);
   const [reportStyle, setReportStyle] = useState("academic");
   const [reportFormat, setReportFormat] = useState("docx");
   const [confirmClear, setConfirmClear] = useState(false);
+  // 拖过之后才钉像素高度；未拖时三块 flex 均分
+  const [paneH, setPaneH] = useState<{ importH: number; chartH: number; tableH: number } | null>(
+    null
+  );
+  const dragRef = useRef<{
+    kind: "import" | "chart";
+    startY: number;
+    importH: number;
+    chartH: number;
+    tableH: number;
+  } | null>(null);
   // 模块卡折叠：画像/统计表/图表各自独立，默认展开（结果默认可见优先于省空间）
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggleSection = (key: string) =>
@@ -161,6 +178,58 @@ export default function WorkspacePanel({
           Object.keys(step.result ?? {}).filter((key) => key !== "method_note").length > 0
       )
   );
+  const hasTables = tableSteps.length > 0 || resultOnlySteps.length > 0;
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const delta = event.clientY - drag.startY;
+      if (drag.kind === "import") {
+        const maxImport = drag.importH + drag.chartH - MIN_PANE;
+        const importH = Math.min(Math.max(drag.importH + delta, MIN_PANE), maxImport);
+        setPaneH({ importH, chartH: drag.importH + drag.chartH - importH, tableH: drag.tableH });
+      } else {
+        const maxChart = drag.chartH + drag.tableH - MIN_PANE;
+        const chartH = Math.min(Math.max(drag.chartH + delta, MIN_PANE), maxChart);
+        setPaneH({ importH: drag.importH, chartH, tableH: drag.chartH + drag.tableH - chartH });
+      }
+    };
+    const onUp = () => {
+      dragRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  // 表格区从无到有时，旧像素高度没有表格份额，退回 flex 均分
+  useEffect(() => {
+    if (hasTables) {
+      setPaneH((prev) => (prev && prev.tableH < MIN_PANE ? null : prev));
+    }
+  }, [hasTables]);
+
+  const startPaneDrag = (kind: "import" | "chart") => (event: ReactPointerEvent) => {
+    const root = splitRootRef.current;
+    if (!root) return;
+    const importEl = root.querySelector("[data-split-pane='import']");
+    const chartEl = root.querySelector("[data-split-pane='chart']");
+    const tableEl = root.querySelector("[data-split-pane='table']");
+    if (!importEl || !chartEl) return;
+    const importH = importEl.getBoundingClientRect().height;
+    const chartH = chartEl.getBoundingClientRect().height;
+    const tableH = tableEl?.getBoundingClientRect().height ?? 0;
+    dragRef.current = { kind, startY: event.clientY, importH, chartH, tableH };
+    setPaneH({ importH, chartH, tableH });
+    event.preventDefault();
+  };
+
+  const paneStyle = (height: number | undefined) =>
+    height != null ? ({ height, flex: "0 0 auto" } as const) : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col break-words">
@@ -237,8 +306,12 @@ export default function WorkspacePanel({
         />
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <section className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden border-b border-ink/10">
+      <div ref={splitRootRef} className="flex min-h-0 flex-1 flex-col">
+        <section
+          data-split-pane="import"
+          style={paneStyle(paneH?.importH)}
+          className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+        >
           <div className="shrink-0 border-b border-ink/8 px-3 py-1.5 text-xs font-medium text-primary-dark">
             导入表格
           </div>
@@ -277,7 +350,17 @@ export default function WorkspacePanel({
         )}
           </div>
         </section>
-        <section className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden">
+        <ResizeHandle
+          orientation="horizontal"
+          testId="split-import-chart"
+          onPointerDown={startPaneDrag("import")}
+          label="调整导入表格与图表交付高度"
+        />
+        <section
+          data-split-pane="chart"
+          style={paneStyle(paneH?.chartH)}
+          className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+        >
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ink/8 px-3 py-1.5">
             <BarChart3 className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
             <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
@@ -316,7 +399,7 @@ export default function WorkspacePanel({
             )}
           </div>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-            {charts.length === 0 && tableSteps.length === 0 && resultOnlySteps.length === 0 && (
+            {charts.length === 0 && (
               <p className="text-sm leading-relaxed text-ink-muted">
                 执行后图表按时间倒序展示在这里，最新的在最上面。
               </p>
@@ -347,6 +430,29 @@ export default function WorkspacePanel({
                 ))}
               </div>
             )}
+          </div>
+        </section>
+        {hasTables && (
+          <>
+            <ResizeHandle
+              orientation="horizontal"
+              testId="split-chart-table"
+              onPointerDown={startPaneDrag("chart")}
+              label="调整图表交付与表格区域高度"
+            />
+            <section
+              data-split-pane="table"
+              style={paneStyle(paneH?.tableH)}
+              className="flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden"
+            >
+              <div className="flex shrink-0 items-center gap-2 border-b border-ink/8 px-3 py-1.5">
+                <FileSpreadsheet className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
+                  表格
+                  {`（${tableSteps.length + resultOnlySteps.length}）`}
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {tableSteps.length > 0 && (
               <div data-testid="table-delivery">
                 <div className="mb-2 flex items-center gap-2">
@@ -470,8 +576,10 @@ export default function WorkspacePanel({
                 )}
               </div>
             )}
-          </div>
-        </section>
+              </div>
+            </section>
+          </>
+        )}
       </div>
     </div>
   );

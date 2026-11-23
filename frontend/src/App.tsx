@@ -16,6 +16,7 @@ import WorkspacePanel from "./workspace/WorkspacePanel";
 import ChainBuilder from "./builder/ChainBuilder";
 import type { ChainStep } from "./builder/ChainBuilder";
 import ErrorBoundary from "./components/ErrorBoundary";
+import ResizeHandle from "./components/ResizeHandle";
 import UploadChoiceDialog from "./components/UploadChoiceDialog";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { listSessions, login } from "./api/client";
@@ -127,27 +128,6 @@ function useIsDesktop() {
     return () => query.removeEventListener("change", handler);
   }, []);
   return isDesktop;
-}
-
-function ResizeHandle({
-  onPointerDown,
-  label,
-}: {
-  onPointerDown: (event: ReactPointerEvent) => void;
-  label: string;
-}) {
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={label}
-      onPointerDown={onPointerDown}
-      className="group hidden w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-surface-page lg:flex"
-      title="拖拽调整宽度"
-    >
-      <div className="h-14 w-0.5 rounded-full bg-ink/10 transition-colors group-hover:bg-primary/60" />
-    </div>
-  );
 }
 
 /** 最新一条模型方案的步骤（作为装配起点导入） */

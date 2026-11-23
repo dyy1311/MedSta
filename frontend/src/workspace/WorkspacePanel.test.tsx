@@ -42,6 +42,8 @@ describe("WorkspacePanel", () => {
     expect(screen.getByText("6 行 × 2 列")).toBeInTheDocument();
     expect(screen.getByText("统计表交付（1）")).toBeInTheDocument();
     expect(screen.getByText("图表交付（1）")).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "调整导入表格与图表交付高度" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "调整图表交付与表格区域高度" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "CSV" })).toHaveAttribute(
       "href",
       "/export/s1/0?format=csv"
