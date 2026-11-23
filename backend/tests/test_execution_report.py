@@ -9,7 +9,6 @@ import pandas as pd
 from medsta.agents.discussion import AnalysisPlan, PlanStep
 from medsta.pipeline.executor import PipelineExecutor
 
-
 DF = pd.DataFrame(
     {
         "group": ["A", "A", "A", "B", "B", "B"],
@@ -116,3 +115,27 @@ def test_progress_callback_reports_every_step(tmp_path) -> None:
     )
 
     assert calls == [(0, 2, "第一步"), (1, 2, "第二步")]
+
+
+def test_report_payload_is_strict_json_with_numpy_scalars(tmp_path) -> None:
+    """终审修复: _jsonify 必须吃掉 np.bool_/NaT/NaN——否则 WS 发帧抛 TypeError，
+    前端整帧丢弃并卡在「执行中」。这里直接验证归一后的报告可严格序列化。"""
+    import numpy as np
+
+    from medsta.pipeline.executor import _jsonify
+
+    payload = {
+        "flag": np.bool_(True),
+        "count": np.int64(3),
+        "ratio": np.float64("nan"),
+        "missing_time": pd.NaT,
+        "table": {"columns": ["a"], "rows": [{"a": np.float64("inf")}]},
+    }
+    normalized = _jsonify(payload)
+
+    assert normalized["flag"] is True
+    assert normalized["count"] == 3
+    assert normalized["ratio"] is None
+    assert normalized["missing_time"] is None
+    assert normalized["table"]["rows"][0]["a"] is None
+    json.dumps(normalized, allow_nan=False)  # 不抛异常即合格

@@ -112,8 +112,10 @@ def test_multi_step_report(tmp_path) -> None:
     """B7: 多步骤顺序执行，报告含全部步骤且全为 success"""
     plan = _plan(
         [
-            PlanStep(title="统计", method="describe", target_columns=["sales"], chart_type="none", rationale="测试依据：数值列与任务匹配", ),
-            PlanStep(title="分布图", method="describe", target_columns=["sales"], chart_type="histogram", rationale="测试依据：数值列与任务匹配", ),
+            PlanStep(title="统计", method="describe", target_columns=["sales"],
+                     chart_type="none", rationale="测试依据：数值列与任务匹配", ),
+            PlanStep(title="分布图", method="describe", target_columns=["sales"],
+                     chart_type="histogram", rationale="测试依据：数值列与任务匹配", ),
         ]
     )
     report = PipelineExecutor().execute(_df(), plan, artifact_dir=tmp_path)

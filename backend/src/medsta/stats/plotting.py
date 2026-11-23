@@ -37,6 +37,7 @@ CHART_LABELS = {
     "qq_plot": "Q-Q plot",
     "residual_plot": "residual plot",
     "pie": "pie",
+    "survival_curve": "survival curve",
 }
 
 
@@ -46,9 +47,8 @@ def _stars(p_value: float | None) -> str:
     return "***" if p_value < 0.001 else "**" if p_value < 0.01 else "*" if p_value < 0.05 else "ns"
 
 
-def _annotate_pairwise(ax, positions: list[float], pairs: list[dict], alpha: float) -> None:
+def _annotate_pairwise(ax, positions: list[str], pairs: list[dict], alpha: float) -> None:
     """在组间绘制比较线并标注星号/ns（最多 3 对，按校正后 p 升序）。"""
-    import itertools
 
     ymax = ax.get_ylim()[1]
     span = ax.get_ylim()[1] - ax.get_ylim()[0]
@@ -92,37 +92,284 @@ def chart_title(step: Any, index: int) -> str:
     return f"{CHART_LABELS.get(step.chart_type, step.chart_type)} · step {index + 1}"
 
 
+# 用户出图标注：内部保留键，与 _layout / _artifact_dir 同口径，模型不可填
+PLOT_STYLE_KEYS = (
+    ("title", "_plot_title"),
+    ("xlabel", "_plot_xlabel"),
+    ("ylabel", "_plot_ylabel"),
+    ("xticks", "_plot_xticks"),
+    ("yticks", "_plot_yticks"),
+    ("groups", "_plot_groups"),
+    ("group_order", "_plot_group_order"),
+)
+
+
+def style_from_params(params: dict | None) -> dict[str, str]:
+    """从步骤 params 抽出非空标注，供报告回传前端回填。"""
+    source = params or {}
+    style: dict[str, str] = {}
+    for public, internal in PLOT_STYLE_KEYS:
+        text = str(source.get(internal) or "").strip()
+        if text:
+            style[public] = text
+    return style
+
+
+def merge_plot_style(params: dict, payload: dict) -> None:
+    """把前端标注写入步骤 params；空字符串表示改回自动标注。"""
+    for public, internal in PLOT_STYLE_KEYS:
+        if public not in payload:
+            continue
+        text = str(payload.get(public) or "").strip()
+        if text:
+            params[internal] = text
+        else:
+            params.pop(internal, None)
+
+
+def _parse_tick_spec(raw: str) -> tuple[list[float] | None, list[str]]:
+    """逗号分隔：全是数字则作为刻度位置，否则作为刻度标签。"""
+    labels = [part.strip() for part in raw.split(",") if part.strip()]
+    if not labels:
+        return None, []
+    try:
+        return [float(item) for item in labels], labels
+    except ValueError:
+        return None, labels
+
+
+def _parse_group_spec(raw: str) -> tuple[dict[str, str], list[str]]:
+    """组名：`原名=新名` 映射，或逗号分隔按出现顺序替换。"""
+    mapping: dict[str, str] = {}
+    ordered: list[str] = []
+    for part in [item.strip() for item in raw.split(",") if item.strip()]:
+        if "=" in part:
+            old, new = part.split("=", 1)
+            old, new = old.strip(), new.strip()
+            if old and new:
+                mapping[old] = new
+        else:
+            ordered.append(part)
+    return mapping, ordered
+
+
+def _order_names(names: list[str], order_spec: str, rename_spec: str = "") -> list[str]:
+    """按用户指定重排列组；可用原名或已改的显示名。未点名的组保持相对顺序接在后面。"""
+    wanted = [part.strip() for part in order_spec.split(",") if part.strip()]
+    if not wanted:
+        return names
+    mapping, _ = _parse_group_spec(rename_spec)
+    inverse = {new: old for old, new in mapping.items()}
+    present = set(names)
+    rank: dict[str, int] = {}
+    for index, token in enumerate(wanted):
+        key = token if token in present else inverse.get(token)
+        if key in present and key not in rank:
+            rank[key] = index
+    listed = [name for name in names if name in rank]
+    listed.sort(key=lambda name: rank[name])
+    rest = [name for name in names if name not in rank]
+    return listed + rest
+
+
+# 组名出现在横轴上的图；生存曲线组名在图例，时间轴不动
+_GROUP_TICK_CHARTS = {"boxplot", "violin", "bar", "grouped_bar"}
+
+
+def _apply_group_names(axes: list[Any], spec: str, *, chart: str, faceted: bool) -> None:
+    """改组标签：刻度、图例、饼图扇区、分面标题。成对比较线按原组位置绘制，不受显示名影响。"""
+    mapping, ordered = _parse_group_spec(spec)
+    if not mapping and not ordered:
+        return
+    live = [item for item in axes if item is not None]
+    rename_ticks = chart in _GROUP_TICK_CHARTS
+    for ax in live:
+        if chart == "pie":
+            slices = [text for text in ax.texts if "%" not in (text.get_text() or "")]
+            if mapping:
+                for text in slices:
+                    text.set_text(mapping.get(text.get_text(), text.get_text()))
+            else:
+                for index, text in enumerate(slices):
+                    if index < len(ordered):
+                        text.set_text(ordered[index])
+            continue
+        ticks = [tick.get_text() for tick in ax.get_xticklabels()]
+        legend = ax.get_legend()
+        legend_texts = list(legend.get_texts()) if legend is not None else []
+        legend_names = [item.get_text() for item in legend_texts]
+        if mapping:
+            if rename_ticks and ticks:
+                ax.set_xticklabels([mapping.get(name, name) for name in ticks])
+            for item in legend_texts:
+                item.set_text(mapping.get(item.get_text(), item.get_text()))
+        elif ordered:
+            if chart == "survival_curve" and legend_texts:
+                for index, item in enumerate(legend_texts):
+                    if index < len(ordered):
+                        item.set_text(ordered[index])
+            elif rename_ticks and ticks:
+                old_ticks = list(ticks)
+                ax.set_xticklabels(
+                    [ordered[index] if index < len(ordered) else name for index, name in enumerate(ticks)]
+                )
+                if legend_names == old_ticks:
+                    for index, item in enumerate(legend_texts):
+                        if index < len(ordered):
+                            item.set_text(ordered[index])
+        if faceted:
+            title = ax.get_title()
+            if " = " in title:
+                prefix, value = title.rsplit(" = ", 1)
+                if mapping:
+                    ax.set_title(f"{prefix} = {mapping.get(value, value)}")
+                elif ordered:
+                    position = live.index(ax)
+                    if position < len(ordered):
+                        ax.set_title(f"{prefix} = {ordered[position]}")
+
+
+def _apply_ticks(ax: Any, raw: str, which: str) -> None:
+    locations, labels = _parse_tick_spec(raw)
+    if not labels:
+        return
+    if which == "x":
+        if locations is not None:
+            ax.set_xticks(locations)
+        else:
+            ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels)
+        return
+    if locations is not None:
+        ax.set_yticks(locations)
+    else:
+        ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+
+
+def apply_plot_style(
+    fig: Any,
+    axes: list[Any],
+    step: Any,
+    index: int,
+    *,
+    faceted: bool,
+    chart: str,
+) -> None:
+    """在默认出图之后覆盖标题/坐标轴；未填的字段保持数据驱动默认值。"""
+    params = dict(step.params or {})
+    title = str(params.get("_plot_title") or "").strip()
+    xlabel = str(params.get("_plot_xlabel") or "").strip()
+    ylabel = str(params.get("_plot_ylabel") or "").strip()
+    xticks = str(params.get("_plot_xticks") or "").strip()
+    yticks = str(params.get("_plot_yticks") or "").strip()
+    groups = str(params.get("_plot_groups") or "").strip()
+    live = [item for item in axes if item is not None]
+    if title:
+        if faceted or len(live) > 1:
+            fig.suptitle(title)
+        elif live:
+            live[0].set_title(title)
+    elif faceted:
+        fig.suptitle(chart_title(step, index))
+    elif live:
+        live[0].set_title(chart_title(step, index))
+    if groups:
+        fig.canvas.draw()
+        _apply_group_names(live, groups, chart=chart, faceted=faceted)
+    if chart == "pie":
+        return
+    for item in live:
+        if xlabel:
+            item.set_xlabel(xlabel)
+        if ylabel:
+            item.set_ylabel(ylabel)
+        if xticks:
+            _apply_ticks(item, xticks, "x")
+        if yticks:
+            _apply_ticks(item, yticks, "y")
+
+
 def render_chart(
-    df: pd.DataFrame, step: Any, artifact_dir: pathlib.Path, index: int, result: Any = None
+    df: pd.DataFrame,
+    step: Any,
+    artifact_dir: pathlib.Path,
+    index: int,
+    result: Any = None,
+    image_format: str = "png",
 ) -> pathlib.Path:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
     columns = list(step.target_columns)
     chart = step.chart_type
     params = dict(step.params or {})
+    faceted = False
+    order_spec = str(params.get("_plot_group_order") or "").strip()
+    rename_spec = str(params.get("_plot_groups") or "").strip()
+
+    def order_of(names: list[str]) -> list[str]:
+        return _order_names(names, order_spec, rename_spec) if order_spec else names
 
     if chart == "histogram":
         series = pd.to_numeric(df[columns[0]], errors="coerce").dropna()
-        ax.hist(series, bins=15, color="#3B5BDB", alpha=0.85, edgecolor="white")
-        ax.set_xlabel(columns[0])
-        ax.set_ylabel("count")
+        group_col = params.get("group_by")
+        if group_col and group_col in df.columns:
+            # 按类别分面：每个类别一个子图（用户要求「每个类别做一张图」）。
+            # 组数过多时分面不可读，超过 6 组退回总体直方图。
+            groups = [
+                (str(key), pd.to_numeric(frame[columns[0]], errors="coerce").dropna())
+                for key, frame in df.groupby(group_col, sort=False)
+            ]
+            groups = [(key, values) for key, values in groups if len(values)]
+            keyed = dict(groups)
+            groups = [(key, keyed[key]) for key in order_of([key for key, _ in groups])]
+            if 1 < len(groups) <= 6:
+                plt.close(fig)
+                columns_n = 2 if len(groups) > 1 else 1
+                rows_n = (len(groups) + columns_n - 1) // columns_n
+                fig, axes = plt.subplots(
+                    rows_n, columns_n, figsize=(6.4 * columns_n, 3.2 * rows_n), squeeze=False
+                )
+                low, high = float(series.min()), float(series.max())
+                bins: Any = np.linspace(low, high, 16) if np.isfinite(high) else 15
+                for position, (key, values) in enumerate(groups):
+                    panel = axes[position // columns_n][position % columns_n]
+                    panel.hist(values, bins=bins, color="#3B5BDB", alpha=0.85, edgecolor="white")
+                    panel.set_title(f"{group_col} = {key}", fontsize=9)
+                    panel.set_ylabel("count")
+                for rest in range(len(groups), rows_n * columns_n):
+                    axes[rest // columns_n][rest % columns_n].axis("off")
+                fig.suptitle(f"{columns[0]} 按 {group_col} 分面（n={len(groups)} 组）", fontsize=10)
+                ax = axes[0][0]
+                faceted = True
+        if not faceted:
+            ax.hist(series, bins=15, color="#3B5BDB", alpha=0.85, edgecolor="white")
+            ax.set_xlabel(columns[0])
+            ax.set_ylabel("count")
     elif chart == "pie":
         series = df[columns[0]].dropna().astype(str)
         counts = series.value_counts()
+        counts.index = [str(key) for key in counts.index]
+        counts = counts.reindex(order_of(list(counts.index)))
+        # tab20 有 20 色；超过 6 类时旧调色板会被截断，相邻扇区撞色
+        pie_cmap = plt.colormaps["tab20"]
+        colors = [pie_cmap(i % pie_cmap.N) for i in range(len(counts))]
         ax.pie(
             counts.values,
             labels=[str(k) for k in counts.index],
             autopct="%1.1f%%",
-            colors=["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44", "#E03131", "#9775FA"][: len(counts)],
+            colors=colors,
         )
     elif chart in ("boxplot", "violin"):
         group_col = params.get("group_column") or params.get("group_by")
         if group_col:
-            groups = [
-                pd.to_numeric(g[columns[0]], errors="coerce").dropna()
-                for _, g in df.groupby(group_col, sort=False)
+            pairs = [
+                (str(key), pd.to_numeric(frame[columns[0]], errors="coerce").dropna())
+                for key, frame in df.groupby(group_col, sort=False)
             ]
-            labels = [str(k) for k, _ in df.groupby(group_col, sort=False)]
+            keyed = dict(pairs)
+            labels = order_of([key for key, _ in pairs])
+            groups = [keyed[key] for key in labels]
         else:
             groups = [pd.to_numeric(df[c], errors="coerce").dropna() for c in columns]
             labels = columns
@@ -168,13 +415,54 @@ def render_chart(
                 ax.legend()
         ax.set_xlabel("index")
         ax.set_ylabel(columns[0])
+    elif chart == "survival_curve":
+        payload = result or {}
+        curves: list[tuple[str, list]] = []
+        if isinstance(payload.get("groups"), dict):
+            curves = [
+                (str(label), group.get("points") or [])
+                for label, group in payload["groups"].items()
+            ]
+            keyed_curves = dict(curves)
+            curves = [(key, keyed_curves[key]) for key in order_of([key for key, _ in curves])]
+        elif payload.get("points"):
+            curves = [("overall", payload["points"])]
+        palette = ["#3B5BDB", "#E8590C", "#2F9E44", "#9775FA", "#F08C00", "#22B8CF"]
+        for offset, (label, points) in enumerate(curves):
+            if not points:
+                continue
+            color = palette[offset % len(palette)]
+            step_times = [0.0] + [float(point["time"]) for point in points]
+            step_values = [1.0] + [float(point["survival"]) for point in points]
+            ax.step(step_times, step_values, where="post", color=color, label=label)
+            censored = [
+                (float(point["time"]), float(point["survival"]))
+                for point in points
+                if point.get("censored")
+            ]
+            if censored:
+                ax.plot(
+                    [item[0] for item in censored],
+                    [item[1] for item in censored],
+                    linestyle="none",
+                    marker="|",
+                    markersize=8,
+                    color=color,
+                )
+        ax.set_xlabel(str(payload.get("time_column") or "time"))
+        ax.set_ylabel("survival")
+        ax.set_ylim(0, 1.05)
+        if len(curves) > 1:
+            ax.legend()
     elif chart == "bar":
         group_col = params.get("group_column")
         if group_col:
             means = df.groupby(group_col, sort=False)[columns[0]].apply(
                 lambda s: pd.to_numeric(s, errors="coerce").mean()
             )
-            ax.bar([str(i) for i in means.index], means.to_numpy(), color="#3B5BDB")
+            means.index = [str(key) for key in means.index]
+            means = means.reindex(order_of(list(means.index)))
+            ax.bar(list(means.index), means.to_numpy(), color="#3B5BDB")
             ax.set_ylabel(f"mean {columns[0]}")
         else:
             ax.bar(range(len(df)), pd.to_numeric(df[columns[0]], errors="coerce"))
@@ -182,12 +470,45 @@ def render_chart(
             ax.set_ylabel(columns[0])
     elif chart == "grouped_bar":
         group_col = params.get("group_column") or params.get("group_by")
-        if not group_col:
-            raise ValueError("grouped_bar 需要 group_column 参数")
-        pivoted = df.groupby(group_col, sort=False)[columns].apply(
-            lambda g: g.apply(pd.to_numeric, errors="coerce").mean()
-        )
-        pivoted.plot(kind="bar", ax=ax, color=["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44"])
+        contingency_methods = {"chi_square", "mcnemar_test"}
+        if step.method in contingency_methods:
+            # 列联表计数柱状图（修复：此前误用数值均值路径，分类数据画成空/错图）
+            rows = ((result or {}).get("table") or {}).get("rows") or []
+            if not rows:
+                raise ValueError("列联表计数图需要检验结果中的列联表")
+            category_key = next(iter(rows[0]))
+            categories = order_of([str(row[category_key]) for row in rows])
+            by_category = {str(row[category_key]): row for row in rows}
+            rows = [by_category[name] for name in categories]
+            series_names = order_of([str(key) for key in rows[0] if key != category_key])
+            positions = np.arange(len(categories))
+            width = 0.8 / max(1, len(series_names))
+            palette = ["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44", "#9775FA"]
+            for offset, name in enumerate(series_names):
+                values = [float(row.get(name, 0) or 0) for row in rows]
+                ax.bar(
+                    positions + offset * width - 0.4 + width / 2,
+                    values,
+                    width,
+                    label=str(name),
+                    color=palette[offset % len(palette)],
+                )
+            ax.set_xticks(positions)
+            ax.set_xticklabels(categories)
+            ax.set_ylabel("频数")
+            ax.legend(title=category_key)
+        else:
+            # 数值列：分组均值柱状图
+            if not group_col:
+                raise ValueError("grouped_bar 需要 group_column 参数")
+            pivoted = df.groupby(group_col, sort=False)[columns].apply(
+                lambda g: g.apply(pd.to_numeric, errors="coerce").mean()
+            )
+            pivoted.index = [str(key) for key in pivoted.index]
+            pivoted = pivoted.reindex(order_of(list(pivoted.index)))
+            col_names = [str(col) for col in pivoted.columns]
+            pivoted = pivoted.reindex(columns=order_of(col_names))
+            pivoted.plot(kind="bar", ax=ax, color=["#3B5BDB", "#22B8CF", "#F08C00", "#2F9E44"])
     elif chart == "heatmap":
         matrix = df[columns].apply(pd.to_numeric, errors="coerce").corr()
         image = ax.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
@@ -218,9 +539,11 @@ def render_chart(
     else:
         raise ValueError(f"未知图表类型：{chart}")
 
-    ax.set_title(chart_title(step, index))
+    style_axes = list(fig.axes) if faceted else [ax]
+    apply_plot_style(fig, style_axes, step, index, faceted=faceted, chart=chart)
     fig.tight_layout()
-    path = artifact_dir / f"step_{index}_{step.method}_{chart}.png"
+    suffix = "jpg" if image_format == "jpg" else image_format
+    path = artifact_dir / f"step_{index}_{step.method}_{chart}.{suffix}"
     fig.savefig(path, dpi=110)
     plt.close(fig)
     return path
@@ -255,6 +578,8 @@ def summarize_series(series: pd.Series) -> dict[str, Any]:
 
 def default_chart_for(column_type: str, method: str = "") -> str:
     """按变量类型给出默认图表建议。"""
+    if method == "survival_analysis":
+        return "survival_curve"
     if column_type == "index":
         return "line"
     if column_type == "categorical":
@@ -278,6 +603,8 @@ def render_combined(paths: list[pathlib.Path], artifact_dir: pathlib.Path) -> pa
     """多图同画板：将已生成的 PNG 拼接为一张图。"""
     import math
 
+    if len(paths) < 2:
+        raise ValueError("拼接图至少需要 2 张已生成的图")
     rows = math.ceil(len(paths) / 2)
     fig, axes = plt.subplots(rows, 2, figsize=(6.4 * 2, 4.2 * rows))
     axes = np.atleast_1d(axes).ravel()

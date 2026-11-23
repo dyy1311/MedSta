@@ -1,8 +1,72 @@
-import { useRef } from "react";
-import { BarChart3, CloudUpload, FileSpreadsheet, Inbox, Plus } from "lucide-react";
-import type { WorkspaceTab } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { BarChart3, ChevronDown, CloudUpload, Eraser, FileSpreadsheet, Inbox, Plus } from "lucide-react";
+import type { ExecutionReport, PlotStyle, ReportStep, WorkspaceTab } from "../types";
+import { withToken } from "../api/client";
+import { CHART_OPTIONS } from "../chat/chartOptions";
+import ClearOutputsDialog from "../components/ClearOutputsDialog";
+import ResizeHandle from "../components/ResizeHandle";
 import ProfileTable from "./ProfileTable";
 import ChartCard from "./ChartCard";
+import ResultTable from "./ResultTable";
+
+/** 上下分栏最小高度，避免拖成一条缝 */
+const MIN_PANE = 96;
+
+/** 产物文件名 step_{n}_{method}_{chart}.png 与注册表同源，用来回填出图后修改标注 */
+const ARTIFACT_CHARTS = CHART_OPTIONS
+  .map((item) => item.value)
+  .filter((value) => value !== "none")
+  .sort((a, b) => b.length - a.length);
+
+function chartTypeOf(step: Pick<ReportStep, "chart_type" | "artifact" | "method">): string | undefined {
+  if (step.chart_type && step.chart_type !== "none") return step.chart_type;
+  const stem = String(step.artifact ?? "").split("?")[0].replace(/\.[^.]+$/, "");
+  if (step.method) {
+    const token = `_${step.method}_`;
+    const at = stem.lastIndexOf(token);
+    if (at >= 0) {
+      const chart = stem.slice(at + token.length);
+      if (ARTIFACT_CHARTS.includes(chart)) return chart;
+    }
+    return undefined;
+  }
+  return ARTIFACT_CHARTS.find((chart) => stem.endsWith(`_${chart}`));
+}
+
+/** 历史报告可寻址导出：带 report_id 定位对应报告，缺省由后端取最新（M2）。 */
+function reportQuery(report: ExecutionReport): string {
+  return report.report_id ? `&report_id=${report.report_id}` : "";
+}
+
+/** 模块卡 / 分栏折叠：折叠后只留标题，展开块均分中间剩余高度 */
+function CollapseToggle({
+  collapsed,
+  label,
+  onToggle,
+  className = "ml-auto",
+}: {
+  collapsed: boolean;
+  label: string;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? `展开${label}` : `收起${label}`}
+      className={`cursor-pointer rounded-lg p-1 text-ink-muted transition-colors hover:bg-surface-page hover:text-ink ${className}`}
+    >
+      <ChevronDown
+        className={`h-4 w-4 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+      />
+    </button>
+  );
+}
+
+type PaneId = "import" | "chart" | "table";
 
 interface Props {
   sessionId: string;
@@ -11,7 +75,27 @@ interface Props {
   uploading: boolean;
   onActivate: (datasetId: string) => void;
   onUpload: (file: File) => void;
-  onSetColumnType: (column: string, type: string) => void;
+  /** 单列类型修改：带 datasetId——工作区标签与「会话绑定数据集」可能不同 */
+  onSetColumnType: (
+    datasetId: string,
+    column: string,
+    type: string,
+    source?: "manual" | "ai"
+  ) => void;
+  onSetColumnTypes?: (
+    datasetId: string,
+    types: Record<string, string>,
+    source?: "manual" | "ai"
+  ) => void;
+  /** 041 AI 确认类型：触发建议请求 / 当前建议列表 / 模型分析中 */
+  onSuggestTypes?: () => void;
+  columnSuggestions?: { name: string; suggested_type: string; confidence: number; reason: string }[];
+  suggesting?: boolean;
+  /** 清空工作区既往产出（保留导入表格）；未传入则不展示入口 */
+  onClearOutputs?: () => void;
+  /** 执行中禁止清空，避免删掉正在写入的图表 */
+  clearDisabled?: boolean;
+  onRestyleChart?: (stepIndex: number, chartType: string, style: PlotStyle, method: string) => void;
 }
 
 export default function WorkspacePanel({
@@ -22,21 +106,156 @@ export default function WorkspacePanel({
   onActivate,
   onUpload,
   onSetColumnType,
+  onSetColumnTypes,
+  onSuggestTypes,
+  columnSuggestions,
+  suggesting = false,
+  onClearOutputs,
+  clearDisabled = false,
+  onRestyleChart,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const splitRootRef = useRef<HTMLDivElement>(null);
+  const [reportStyle, setReportStyle] = useState("academic");
+  const [reportFormat, setReportFormat] = useState("docx");
+  const [confirmClear, setConfirmClear] = useState(false);
+  // 拖过之后才钉像素高度；未拖时三块 flex 均分
+  const [paneH, setPaneH] = useState<{ importH: number; chartH: number; tableH: number } | null>(
+    null
+  );
+  const dragRef = useRef<{
+    kind: "import" | "chart";
+    startY: number;
+    importH: number;
+    chartH: number;
+    tableH: number;
+  } | null>(null);
+  // 模块卡折叠：画像/统计表/结果各自独立，默认展开
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggleSection = (key: string) =>
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  // 三栏共享中间区域：收起只留标题，展开的均分剩余高度
+  const [folded, setFolded] = useState<Record<PaneId, boolean>>({
+    import: false,
+    chart: false,
+    table: false,
+  });
+  const toggleFold = (id: PaneId) => {
+    setFolded((prev) => ({ ...prev, [id]: !prev[id] }));
+    setPaneH(null);
+  };
   const active = workspaces.find((workspace) => workspace.datasetId === activeId) ?? workspaces[0];
   const reports = active?.reports ?? [];
+  // 统计表按轮次保留（可对照前后两次执行）
   const tableSteps = reports.flatMap((report) =>
     report.steps
       .filter((step) => step.table?.rows?.length)
       .map((step) => ({ report, step, reportIndex: report.steps.indexOf(step) }))
   );
-  const charts = reports.flatMap((report) =>
-    report.steps.filter((step) => step.artifact).map((step) => step.artifact as string)
+  // 实时图表倒序：所有轮次都展示，最新交付的在最上面
+  const latestReport = reports[reports.length - 1];
+  const charts = reports
+    .flatMap((report) =>
+      report.steps.map((step, stepIndex) => ({
+        filename: step.artifact,
+        stepIndex,
+        method: step.method,
+        reportId: report.report_id,
+        title: step.title,
+        chartType: chartTypeOf(step),
+        plotStyle: step.plot_style,
+        plotRev: typeof step.result?.plot_rev === "number" ? step.result.plot_rev : undefined,
+        restylable: report === latestReport,
+      }))
+    )
+    .filter(
+      (item): item is {
+        filename: string;
+        stepIndex: number;
+        method: string;
+        reportId: string | undefined;
+        title: string;
+        chartType: string | undefined;
+        plotStyle: PlotStyle | undefined;
+        plotRev: number | undefined;
+        restylable: boolean;
+      } => typeof item.filename === "string"
+    )
+    .reverse();
+  // 无专用表格但 result 含数据的步骤：由 JSON 解析生成结果卡（用户要求表格化呈现）
+  const resultOnlySteps = reports.flatMap((report, reportIdx) =>
+    report.steps
+      .map((step, stepIndex) => ({ step, stepIndex, reportIdx }))
+      .filter(
+        ({ step }) =>
+          !step.table?.rows?.length &&
+          Object.keys(step.result ?? {}).filter((key) => key !== "method_note").length > 0
+      )
   );
+  const hasTables = tableSteps.length > 0 || resultOnlySteps.length > 0;
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const delta = event.clientY - drag.startY;
+      if (drag.kind === "import") {
+        const maxImport = drag.importH + drag.chartH - MIN_PANE;
+        const importH = Math.min(Math.max(drag.importH + delta, MIN_PANE), maxImport);
+        setPaneH({ importH, chartH: drag.importH + drag.chartH - importH, tableH: drag.tableH });
+      } else {
+        const maxChart = drag.chartH + drag.tableH - MIN_PANE;
+        const chartH = Math.min(Math.max(drag.chartH + delta, MIN_PANE), maxChart);
+        setPaneH({ importH: drag.importH, chartH, tableH: drag.chartH + drag.tableH - chartH });
+      }
+    };
+    const onUp = () => {
+      dragRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  // 表格区从无到有时，旧像素高度没有表格份额，退回 flex 均分
+  useEffect(() => {
+    if (hasTables) {
+      setPaneH((prev) => (prev && prev.tableH < MIN_PANE ? null : prev));
+    }
+  }, [hasTables]);
+
+  const startPaneDrag = (kind: "import" | "chart") => (event: ReactPointerEvent) => {
+    if (kind === "import" && (folded.import || folded.chart)) return;
+    if (kind === "chart" && (folded.chart || folded.table)) return;
+    const root = splitRootRef.current;
+    if (!root) return;
+    const importEl = root.querySelector("[data-split-pane='import']");
+    const chartEl = root.querySelector("[data-split-pane='chart']");
+    const tableEl = root.querySelector("[data-split-pane='table']");
+    if (!importEl || !chartEl) return;
+    const importH = importEl.getBoundingClientRect().height;
+    const chartH = chartEl.getBoundingClientRect().height;
+    const tableH = tableEl?.getBoundingClientRect().height ?? 0;
+    dragRef.current = { kind, startY: event.clientY, importH, chartH, tableH };
+    setPaneH({ importH, chartH, tableH });
+    event.preventDefault();
+  };
+
+  const paneStyle = (id: PaneId, height: number | undefined) => {
+    if (folded[id]) return { flex: "0 0 auto", height: "auto" } as const;
+    if (height != null) return { height, flex: "0 0 auto" } as const;
+    return undefined;
+  };
+  const paneClass = (id: PaneId) =>
+    folded[id]
+      ? "flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden"
+      : "flex min-h-32 min-w-0 flex-1 flex-col overflow-hidden";
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col break-words">
       {/* 工作区分页 Tab */}
       <input
         ref={fileRef}
@@ -49,20 +268,25 @@ export default function WorkspacePanel({
           event.target.value = "";
         }}
       />
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-ink/8 bg-surface-card px-3 py-2">
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-ink/8 bg-surface-card px-3 py-2">
         {workspaces.map((workspace) => {
           const isActive = workspace.datasetId === active?.datasetId;
           return (
             <button
               key={workspace.datasetId}
               onClick={() => onActivate(workspace.datasetId)}
-              className={`shrink-0 cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
+              className={`min-h-11 shrink-0 cursor-pointer rounded-lg border-b-2 px-3 py-1.5 text-xs font-medium transition-colors duration-200 ${
                 isActive
-                  ? "bg-primary/10 text-primary shadow-[inset_0_-2px_0_0_#3B5BDB]"
-                  : "text-ink-muted hover:bg-surface-page hover:text-ink"
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-transparent text-ink-muted hover:bg-surface-page hover:text-ink"
               }`}
             >
               {workspace.name}
+              {workspace.imputed && (
+                <span className="ml-1 rounded bg-warn/15 px-1 py-0.5 text-[10px] font-normal text-warn">
+                  已插补
+                </span>
+              )}
             </button>
           );
         })}
@@ -77,51 +301,253 @@ export default function WorkspacePanel({
         <button
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
-          className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-lg bg-primary/8 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-wait disabled:opacity-50"
+          className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-lg bg-primary/8 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors duration-200 hover:bg-primary/15 disabled:cursor-wait disabled:opacity-50"
         >
-          <CloudUpload className="h-3.5 w-3.5" />
+          <CloudUpload className="h-3.5 w-3.5" aria-hidden="true" />
           {uploading ? "导入中…" : "导入表格"}
         </button>
+        {onClearOutputs && workspaces.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setConfirmClear(true)}
+            disabled={clearDisabled}
+            title={clearDisabled ? "分析正在执行，结束后再清空" : "清空工作台既往产出（保留导入表格）"}
+            className="ml-auto inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink-muted transition-colors duration-200 hover:border-danger/40 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Eraser className="h-3.5 w-3.5" aria-hidden="true" />
+            清空产出
+          </button>
+        )}
       </div>
+      {confirmClear && onClearOutputs && (
+        <ClearOutputsDialog
+          onCancel={() => setConfirmClear(false)}
+          onConfirm={() => {
+            setConfirmClear(false);
+            onClearOutputs();
+          }}
+        />
+      )}
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+      <div ref={splitRootRef} className="flex min-h-0 flex-1 flex-col">
+        <section
+          data-split-pane="import"
+          style={paneStyle("import", paneH?.importH)}
+          className={paneClass("import")}
+        >
+          <div className="flex shrink-0 items-center gap-2 border-b border-ink/8 px-3 py-1.5">
+            <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
+              导入表格
+            </span>
+            <CollapseToggle
+              collapsed={folded.import}
+              label="导入表格"
+              onToggle={() => toggleFold("import")}
+            />
+          </div>
+          {!folded.import && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {!active ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-ink-muted">
             <Inbox className="h-10 w-10 opacity-40" />
-            <p className="text-sm">上传数据并确认方案后，数据画像与图表将展示在这里</p>
+            <p className="text-sm leading-relaxed">上传数据并确认方案后，数据画像与图表将展示在这里</p>
           </div>
         ) : (
           <>
+            {active.imputed && (
+              <div className="rounded-lg border border-warn/30 bg-warn/8 p-2.5 text-xs leading-relaxed text-warn">
+                该数据集为 MICE 单数据集插补结果：缺失值已填补，但标准误偏小，不宜直接当作确证性结论；原始数据仍在其他标签页。
+              </div>
+            )}
             {active.profile && (
               <ProfileTable
                 profile={active.profile}
-                onSetColumnType={(column, type) => onSetColumnType(column, type)}
+                onSetColumnType={(column, type, source) =>
+                  onSetColumnType(active.datasetId, column, type, source)
+                }
+                onSetColumnTypes={
+                  onSetColumnTypes
+                    ? (types, source) => onSetColumnTypes(active.datasetId, types, source)
+                    : undefined
+                }
+                onSuggestTypes={onSuggestTypes}
+                suggestions={columnSuggestions}
+                suggesting={suggesting}
+                collapsed={Boolean(collapsed.profile)}
+                onToggleCollapse={() => toggleSection("profile")}
               />
             )}
+          </>
+        )}
+          </div>
+          )}
+        </section>
+        {!folded.import && !folded.chart && (
+        <ResizeHandle
+          orientation="horizontal"
+          testId="split-import-chart"
+          onPointerDown={startPaneDrag("import")}
+          label="调整导入表格与图表交付高度"
+        />
+        )}
+        <section
+          data-split-pane="chart"
+          style={paneStyle("chart", paneH?.chartH)}
+          className={paneClass("chart")}
+        >
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ink/8 px-3 py-1.5">
+            <BarChart3 className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
+              图表交付
+              {charts.length > 0 ? `（${charts.length}）` : ""}
+              {reports.length > 1 ? ` · ${reports.length} 轮` : ""}
+            </span>
+            <span className="ml-auto flex flex-wrap items-center gap-1.5 text-xs">
+            {reports.length > 0 && (
+              <>
+                <select
+                  aria-label="报告风格"
+                  value={reportStyle}
+                  onChange={(event) => setReportStyle(event.target.value)}
+                  className="cursor-pointer rounded-lg border border-ink/15 bg-white px-1.5 py-0.5 text-[11px]"
+                >
+                  <option value="academic">学术风</option>
+                  <option value="lite">轻量</option>
+                </select>
+                <select
+                  aria-label="报告格式"
+                  value={reportFormat}
+                  onChange={(event) => setReportFormat(event.target.value)}
+                  className="cursor-pointer rounded-lg border border-ink/15 bg-white px-1.5 py-0.5 text-[11px]"
+                >
+                  <option value="docx">Word</option>
+                  <option value="pdf">PDF</option>
+                  <option value="md">Markdown</option>
+                </select>
+                <a
+                  href={withToken(`/report/${sessionId}?style=${reportStyle}&format=${reportFormat}`)}
+                  className="cursor-pointer rounded-lg border border-primary/40 px-2 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/5"
+                >
+                  导出报告
+                </a>
+              </>
+            )}
+            <CollapseToggle
+              className="shrink-0"
+              collapsed={folded.chart}
+              label="图表交付"
+              onToggle={() => toggleFold("chart")}
+            />
+            </span>
+          </div>
+          {!folded.chart && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            {charts.length === 0 && (
+              <p className="text-sm leading-relaxed text-ink-muted">
+                执行后图表按时间倒序展示在这里，最新的在最上面。
+              </p>
+            )}
+            {charts.length > 0 && (
+              <div className="grid grid-cols-1 gap-4">
+                {charts.map(({ filename, stepIndex, method, reportId, title, chartType, plotStyle, plotRev, restylable }, index) => (
+                  <ChartCard
+                    key={`${reportId ?? "r"}-${filename}-${index}`}
+                    baseUrl={withToken(`/data/${sessionId}/${active!.datasetId}/artifacts`)}
+                    filename={filename}
+                    caption={title}
+                    cacheRev={plotRev}
+                    chartType={chartType}
+                    plotStyle={plotStyle}
+                    onRestyle={
+                      restylable && onRestyleChart && chartType && chartType !== "none"
+                        ? (style) => onRestyleChart(stepIndex, chartType, style, method)
+                        : undefined
+                    }
+                    extraFormats={["JPG", "PDF", "TIF"].map((label) => ({
+                      label,
+                      href: withToken(`/export/${sessionId}/${stepIndex}?format=${label.toLowerCase()}${
+                        reportId ? `&report_id=${reportId}` : ""
+                      }`),
+                    }))}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+          )}
+        </section>
+        {hasTables && (
+          <>
+            {!folded.chart && !folded.table && (
+            <ResizeHandle
+              orientation="horizontal"
+              testId="split-chart-table"
+              onPointerDown={startPaneDrag("chart")}
+              label="调整图表交付与表格区域高度"
+            />
+            )}
+            <section
+              data-split-pane="table"
+              style={paneStyle("table", paneH?.tableH)}
+              className={paneClass("table")}
+            >
+              <div className="flex shrink-0 items-center gap-2 border-b border-ink/8 px-3 py-1.5">
+                <FileSpreadsheet className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <span className="min-w-0 text-xs font-medium leading-relaxed text-primary-dark">
+                  表格
+                  {`（${tableSteps.length + resultOnlySteps.length}）`}
+                </span>
+                <CollapseToggle
+                  collapsed={folded.table}
+                  label="表格"
+                  onToggle={() => toggleFold("table")}
+                />
+              </div>
+              {!folded.table && (
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
             {tableSteps.length > 0 && (
-              <div>
+              <div data-testid="table-delivery">
                 <div className="mb-2 flex items-center gap-2">
                   <FileSpreadsheet className="h-4 w-4 text-primary" />
                   <span className="text-sm font-semibold text-primary-dark">
                     统计表交付（{tableSteps.length}）
                   </span>
+                  <CollapseToggle
+                    collapsed={Boolean(collapsed.tables)}
+                    label="统计表交付"
+                    onToggle={() => toggleSection("tables")}
+                  />
                 </div>
+                {!collapsed.tables && (
                 <div className="space-y-3">
-                  {tableSteps.map(({ step, reportIndex }) => (
+                  {tableSteps.map(({ step, report, reportIndex }) => (
                     <div
-                      key={`${step.title}-${reportIndex}`}
-                      className="rounded-2xl bg-surface-card p-3 shadow-card"
+                      // 跨报告可能同名同下标步骤：key 需带报告标识，否则 React 复用错行
+                      key={`${report.report_id ?? reportIndex}-${reportIndex}-${step.title}`}
+                      className="animate-fade-in-up rounded-2xl bg-surface-card p-3 shadow-card transition-shadow duration-300 hover:shadow-hover"
                     >
                       <div className="mb-1.5 flex items-center gap-2">
                         <span className="text-sm font-medium text-ink">{step.title}</span>
                         <a
-                          href={`/export/${sessionId}/${reportIndex}?format=csv`}
+                          href={withToken(
+                            `/export/${sessionId}/${reportIndex}?format=json${reportQuery(report)}`
+                          )}
                           className="ml-auto cursor-pointer text-[11px] text-primary hover:underline"
+                        >
+                          JSON
+                        </a>
+                        <a
+                          href={withToken(
+                            `/export/${sessionId}/${reportIndex}?format=csv${reportQuery(report)}`
+                          )}
+                          className="cursor-pointer text-[11px] text-primary hover:underline"
                         >
                           CSV
                         </a>
                         <a
-                          href={`/export/${sessionId}/${reportIndex}?format=xlsx`}
+                          href={withToken(
+                            `/export/${sessionId}/${reportIndex}?format=xlsx${reportQuery(report)}`
+                          )}
                           className="cursor-pointer text-[11px] text-primary hover:underline"
                         >
                           Excel
@@ -130,9 +556,9 @@ export default function WorkspacePanel({
                       <div className="overflow-x-auto rounded-lg border border-ink/8">
                         <table className="w-full text-left text-xs">
                           <thead>
-                            <tr className="bg-surface-page text-ink-muted">
+                            <tr className="border-b border-ink/8 bg-surface-raised text-ink-muted">
                               {step.table!.columns.map((col) => (
-                                <th key={col} className="whitespace-nowrap px-2.5 py-1.5 font-medium">
+                                <th key={col} className="break-words px-2.5 py-1.5 font-medium">
                                   {col}
                                 </th>
                               ))}
@@ -142,12 +568,14 @@ export default function WorkspacePanel({
                             {step.table!.rows.map((row, rowIndex) => (
                               <tr
                                 key={rowIndex}
-                                className={rowIndex % 2 ? "bg-surface-page/60" : ""}
+                                className={`transition-colors hover:bg-primary-soft/50 ${
+                                  rowIndex % 2 ? "bg-surface-page/60" : ""
+                                }`}
                               >
                                 {step.table!.columns.map((col) => (
                                   <td
                                     key={col}
-                                    className="whitespace-nowrap px-2.5 py-1.5 text-ink"
+                                    className="break-words px-2.5 py-1.5 text-ink"
                                   >
                                     {String(row[col] ?? "—")}
                                   </td>
@@ -160,27 +588,49 @@ export default function WorkspacePanel({
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             )}
-            {charts.length > 0 && (
+            {resultOnlySteps.length > 0 && (
               <div>
                 <div className="mb-2 flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-primary" />
+                  <FileSpreadsheet className="h-4 w-4 text-primary" />
                   <span className="text-sm font-semibold text-primary-dark">
-                    执行产出（{charts.length}）
+                    结果数据（{resultOnlySteps.length}）
                   </span>
+                  <span className="text-[11px] text-ink-faint">无专用表格的步骤，由结果 JSON 解析生成</span>
+                  <CollapseToggle
+                    collapsed={Boolean(collapsed.results)}
+                    label="结果数据"
+                    onToggle={() => toggleSection("results")}
+                  />
                 </div>
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {charts.map((filename, index) => (
-                    <ChartCard
-                      key={`${filename}-${index}`}
-                      baseUrl={`/data/${sessionId}/${active.datasetId}/artifacts`}
-                      filename={filename}
-                    />
+                {!collapsed.results && (
+                <div className="space-y-3">
+                  {resultOnlySteps.map(({ step, stepIndex, reportIdx }) => (
+                    <div
+                      key={`result-${reportIdx}-${stepIndex}`}
+                      data-testid={`result-card-${stepIndex}`}
+                      className="animate-fade-in-up rounded-2xl bg-surface-card p-3 shadow-card"
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="text-sm font-medium text-ink">{step.title}</span>
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            step.status === "success" ? "bg-ok" : "bg-danger"
+                          }`}
+                        />
+                      </div>
+                      <ResultTable result={step.result} />
+                    </div>
                   ))}
                 </div>
+                )}
               </div>
             )}
+              </div>
+              )}
+            </section>
           </>
         )}
       </div>

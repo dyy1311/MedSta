@@ -6,6 +6,7 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats as sp_stats
 
 from medsta.agents.discussion import PlanStep
 from medsta.stats import methods
@@ -29,7 +30,7 @@ def _two_group_normal() -> pd.DataFrame:
             "group": ["A"] * 10 + ["B"] * 10,
             "value": [
                 9.80, 10.20, 10.00, 9.90, 10.10, 10.30, 9.70, 10.05, 9.95, 10.15,
-                10.50, 10.60, 10.40, 10.55, 10.45, 10.65, 10.35, 10.50, 10.60, 10.40,
+                11.80, 12.20, 12.00, 11.90, 12.10, 12.30, 11.70, 12.05, 11.95, 12.15,
             ],
         }
     )
@@ -140,12 +141,12 @@ def test_group_compare_normal_equal_variance_uses_t() -> None:
 
     assert result["test"] == "t"
     assert result["p_value"] < 0.001
-    assert result["mean_diff"] == pytest.approx(10.015 - 10.50, abs=1e-6)
+    assert result["mean_diff"] == pytest.approx(10.015 - 12.015, abs=1e-6)
     assert result["ci95"][0] < result["mean_diff"] < result["ci95"][1]
     assert result["cohens_d"] < 0
     assert result["strategy"]["final_method"] == "t"
     assert any("正态性" in item for item in result["strategy"]["steps"])
-    assert any("Levene" in item for item in result["strategy"]["steps"])
+    assert any("F 检验" in item for item in result["strategy"]["steps"])
     assert "次优" in result["strategy"]["alternative"]
     assert result["stars"] in {"***", "**", "*"}
 
@@ -211,7 +212,8 @@ def test_anova_outputs_overall_pairwise_and_corrected_p() -> None:
         assert row["adjusted_p"] <= 1.0
         assert row["stars"] in {"***", "**", "*", "ns"}
     assert "多重" in result["multiplicity_warning"]
-    assert result["table"]["columns"][:4] == ["group_a", "group_b", "statistic", "p_value"]
+    assert result["pairwise"]["method"] == "holm"
+    assert result["table"]["columns"][:3] == ["group_a", "group_b", "mean_diff"]
 
 
 def test_anova_non_normal_uses_kruskal() -> None:
@@ -294,6 +296,17 @@ def test_regression_recovers_known_coefficients() -> None:
     assert result["n"] == 20
 
 
+def test_regression_names_non_numeric_features() -> None:
+    """类别自变量要指出列名，而不是先变成全缺失再在拟合时报一串内部错误。"""
+    df = pd.DataFrame(
+        {"y": [1.0, 2.0, 3.0, 4.0], "group": ["A", "B", "A", "B"]}
+    )
+    step = _step("regression", ["y"], target="y", features=["group"])
+
+    with pytest.raises(ValueError, match="「group」含 4 个非数值"):
+        methods.regression(df, step, step.params)
+
+
 def test_logistic_regression_learns_signal() -> None:
     """B11: 有信号的二分类数据 → OR>1、AUC>0.6、准确率>0.5。"""
     rng = np.random.default_rng(11)
@@ -369,3 +382,211 @@ def test_timeseries_forecast_continues_linear_trend() -> None:
     assert result["forecast_values"] == pytest.approx([11.0, 12.0, 13.0])
     # 图表需要预测值回写 step.params
     assert step.params["_forecast_values"] == pytest.approx([11.0, 12.0, 13.0])
+
+
+def test_correlation_strength_boundaries() -> None:
+    """B12: 相关强度分档边界（教材 §11 注意事项 2）。"""
+    from medsta.stats.methods import _strength_label
+
+    assert _strength_label(0.0) == "较差"
+    assert _strength_label(0.3) == "较差"
+    assert _strength_label(0.31) == "中度"
+    assert _strength_label(0.6) == "中度"
+    assert _strength_label(0.61) == "较高"
+    assert _strength_label(0.8) == "较高"
+    assert _strength_label(0.81) == "很高"
+    assert _strength_label(-0.95) == "很高"
+
+
+def test_regression_anova_table_identity() -> None:
+    """B13: 方差分析表满足 SS总 = SS回归 + SS残差，F = MS回归 / MS残差。"""
+    rng = np.random.default_rng(11)
+    x = np.linspace(1, 20, 20)
+    y = 2.0 * x + 1.0 + rng.normal(0, 0.5, 20)
+    df = pd.DataFrame({"x": x, "y": y})
+    step = _step("regression", ["y"], target="y", features=["x"])
+
+    result = methods.regression(df, step, step.params)
+
+    table = result["anova_table"]
+    assert table["ss_total"] == pytest.approx(
+        table["ss_regression"] + table["ss_residual"], rel=1e-9
+    )
+    assert table["ms_regression"] == pytest.approx(
+        table["ss_regression"] / table["df_regression"], rel=1e-9
+    )
+    assert table["f_value"] == pytest.approx(
+        table["ms_regression"] / table["ms_residual"], rel=1e-9
+    )
+    assert table["df_regression"] == 1
+    assert table["df_residual"] == 18
+
+
+def test_regression_diagnostics_reported() -> None:
+    """B14: 回归输出残差正态性、等方差与样本量提示。"""
+    rng = np.random.default_rng(13)
+    x = np.linspace(1, 8, 8)
+    y = 1.5 * x + 2.0 + rng.normal(0, 0.3, 8)
+    df = pd.DataFrame({"x": x, "y": y})
+    step = _step("regression", ["y"], target="y", features=["x"])
+
+    diagnostics = methods.regression(df, step, step.params)["diagnostics"]
+
+    assert 0.0 <= diagnostics["residual_shapiro_p"] <= 1.0
+    assert 0.0 <= diagnostics["breusch_pagan_p"] <= 1.0
+    assert diagnostics["n_per_feature"] == pytest.approx(8.0)
+    assert "过拟合" in diagnostics["note"]
+
+
+def test_mean_diff_ci_uses_t_critical_value() -> None:
+    """B1: 均值差 95%CI 用 t 临界值；方差不齐时用 Welch–Satterthwaite 自由度。"""
+    df = pd.DataFrame(
+        {
+            "group": ["A"] * 6 + ["B"] * 6,
+            "value": [10, 11, 13, 12, 15, 14, 20, 26, 22, 30, 24, 28],
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", test="welch_t")
+
+    result = methods.group_compare(df, step, step.params)
+
+    a = np.array([10, 11, 13, 12, 15, 14], dtype=float)
+    b = np.array([20, 26, 22, 30, 24, 28], dtype=float)
+    diff = a.mean() - b.mean()
+    va, vb = a.var(ddof=1) / len(a), b.var(ddof=1) / len(b)
+    se = math.sqrt(va + vb)
+    df_welch = (va + vb) ** 2 / (va**2 / (len(a) - 1) + vb**2 / (len(b) - 1))
+    t_critical = sp_stats.t.ppf(0.975, df_welch)
+
+    assert result["ci_method"] == "t"
+    assert result["ci_target"] == "mean_diff"
+    assert result["df"] == pytest.approx(df_welch, rel=1e-9)
+    assert result["t_critical"] == pytest.approx(t_critical, rel=1e-9)
+    assert result["ci95"][0] == pytest.approx(diff - t_critical * se, rel=1e-9)
+    assert result["ci95"][1] == pytest.approx(diff + t_critical * se, rel=1e-9)
+    # 小样本下 t 临界值必然大于正态近似的 1.96
+    assert result["t_critical"] > 1.96
+
+
+def test_paired_uses_difference_normality() -> None:
+    """B2: 配对设计对差值做正态性检验；原始值偏态不影响配对 t 的选择。"""
+    before = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 100.0])
+    diff = np.array([-0.5, -0.3, -0.1, 0.1, 0.3, 0.5, -0.2, 0.2, 0.0, 0.4])
+    after = before + diff
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 10 + ["after"] * 10,
+            "value": list(before) + list(after),
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", paired=True)
+
+    result = methods.group_compare(df, step, step.params)
+
+    assert result["test"] == "t"
+    assert any("差值" in item for item in result["strategy"]["steps"])
+    # 配对区间基于差值标准误，自由度 n-1
+    assert result["df"] == pytest.approx(9.0)
+    assert result["t_critical"] == pytest.approx(sp_stats.t.ppf(0.975, 9), rel=1e-9)
+
+
+def test_paired_non_normal_difference_uses_wilcoxon() -> None:
+    """B2: 差值明显非正态时降级为 Wilcoxon 符号秩，而不是 Mann-Whitney U。"""
+    before = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+    diff = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 50.0])
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 10 + ["after"] * 10,
+            "value": list(before) + list(before + diff),
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", paired=True)
+
+    result = methods.group_compare(df, step, step.params)
+
+    assert result["test"] == "wilcoxon"
+    assert result["p_value"] < 0.05
+
+
+def test_auc_uses_average_ranks_for_ties() -> None:
+    """P0: AUC 对并列预测值须用平均秩（Mann-Whitney 并列修正）。
+
+    单一二分类协变量下预测值只有 2 个取值：正确对 9 + 并列对 3（各计 0.5）
+    → U=12，AUC=12/16=0.75。顺序秩实现会按行序计分得 0.5625。
+    """
+    df = pd.DataFrame(
+        {
+            "x": [0, 0, 0, 0, 1, 1, 1, 1],
+            "y": [1, 0, 0, 0, 1, 1, 1, 0],
+        }
+    )
+    step = _step("logistic_regression", ["y"], target="y", features=["x"])
+
+    result = methods.logistic_regression(df, step, step.params)
+
+    assert result["auc"] == pytest.approx(0.75, abs=1e-6)
+
+
+def test_paired_wilcoxon_bootstrap_resamples_differences() -> None:
+    """P0: 配对 Wilcoxon 的 bootstrap 区间须对差值做单样本重抽样，保留配对结构。"""
+    before = np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0])
+    diff = np.array([2.9, 3.0, 3.1, 3.0, 2.9, 3.1, 3.0])
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 7 + ["after"] * 7,
+            "value": list(before) + list(before - diff),
+        }
+    )
+    step = _step(
+        "group_compare", ["value"], group_column="group", paired=True, test="wilcoxon"
+    )
+
+    result = methods.group_compare(df, step, step.params)
+
+    low, high = result["ci95"]
+    # 差值几乎恒为 3 → 配对重抽样的中位差区间应窄且覆盖真实中位差
+    assert high - low < 1.0
+    assert low <= 3.0 <= high
+
+
+def test_paired_missing_values_drop_whole_pairs_without_misalignment() -> None:
+    """P0: 配对设计任一侧缺失时按原始行序剔整对，不得各组分别 dropna 后错位对齐。"""
+    before = np.array([10.0, 12.0, 14.0, 16.0])
+    after = np.array([9.0, 11.0, np.nan, 10.0])  # 第 3 对：after 侧缺失
+    df = pd.DataFrame(
+        {
+            "group": ["before"] * 4 + ["after"] * 4,
+            "value": list(before) + list(after),
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", paired=True, test="t")
+
+    result = methods.group_compare(df, step, step.params)
+
+    # 完整配对为 (10,9)(12,11)(16,10)；错位实现会得到 (10,9)(12,11)(14,10)
+    expected = sp_stats.ttest_rel([10.0, 12.0, 16.0], [9.0, 11.0, 10.0])
+    assert result["statistic"] == pytest.approx(expected.statistic, rel=1e-12)
+    assert result["p_value"] == pytest.approx(expected.pvalue, rel=1e-12)
+    # 组样本量按「完整配对数」报告，而不是各组各自的非缺失数
+    assert result["groups"]["before"] == 3
+    assert result["groups"]["after"] == 3
+
+
+def test_mannwhitney_reports_median_diff_bootstrap() -> None:
+    """B3: 非参数路径给中位数差与 bootstrap 区间，不冒充均值差 CI。"""
+    df = pd.DataFrame(
+        {
+            "group": ["A"] * 10 + ["B"] * 10,
+            "value": [1, 1, 2, 2, 2, 3, 3, 4, 5, 40, 8, 9, 9, 10, 10, 11, 12, 12, 13, 60],
+        }
+    )
+    step = _step("group_compare", ["value"], group_column="group", test="mannwhitney")
+
+    result = methods.group_compare(df, step, step.params)
+
+    assert result["test"] == "mannwhitney"
+    assert result["ci_method"] == "bootstrap"
+    assert result["ci_target"] == "median_diff"
+    assert result["median_diff"] == pytest.approx(np.median(df["value"][:10]) - np.median(df["value"][10:]))
+    assert "t_critical" not in result
+    assert result["ci95"][0] < result["median_diff"] < result["ci95"][1]

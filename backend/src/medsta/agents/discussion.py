@@ -5,11 +5,14 @@ Owner 划分：模型做语义决策（选方法/定步骤/写说明）；宿主
 """
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
+from medsta.agents.stats_skills import skills_for_request
 from medsta.config import ModelGateway
 from medsta.data.profiler import TableProfile
 from medsta.errors import ToolValidationError
@@ -17,7 +20,23 @@ from medsta.stats.registry import HARD_ISSUE_CODES, tool_catalog, validate_plan
 
 MethodType = Literal[
     "describe",
+    "descriptive_stats",
+    "reference_range",
+    "one_sample_test",
+    "randomized_block_anova",
+    "factorial_anova",
+    "repeated_measures_anova",
+    "mcnemar_test",
+    "sample_size",
+    "survival_analysis",
     "missing_report",
+    "impute",
+    "dedupe",
+    "filter_rows",
+    "standardize",
+    "bin_column",
+    "outlier_report",
+    "winsorize",
     "normality_test",
     "levene_test",
     "group_compare",
@@ -32,7 +51,8 @@ MethodType = Literal[
 ]
 ChartType = Literal[
     "histogram", "boxplot", "violin", "scatter", "line",
-    "bar", "grouped_bar", "heatmap", "qq_plot", "residual_plot", "pie", "none",
+    "bar", "grouped_bar", "heatmap", "qq_plot", "residual_plot", "pie",
+    "survival_curve", "none",
 ]
 
 
@@ -40,12 +60,18 @@ class PlanStep(BaseModel):
     step_id: str | None = Field(default=None, description="步骤唯一 id（前端配置引用）")
     title: str = Field(description="步骤标题")
     method: MethodType = Field(description="分析方法（工具目录中的 name）")
-    target_columns: list[str] = Field(description="目标列名，必须来自数据画像")
+    target_columns: list[str] = Field(
+        default_factory=list, description="目标列名，必须来自数据画像"
+    )
     chart_type: ChartType = Field(description="图表类型（枚举），无需图表时用 none")
     params: dict = Field(default_factory=dict, description="步骤参数（必填项见工具目录）")
     rationale: str = Field(
         default="",
         description="选择依据：为何选此方法/参数（数据类型、任务性质、样本特征、方法适用性）",
+    )
+    depends_on: list[int] = Field(
+        default_factory=list,
+        description="依赖的前序节点下标（0 起，可为空=接在上一步之后）",
     )
 
 
@@ -60,21 +86,77 @@ class PlanOption(BaseModel):
     description: str = Field(default="", description="选项说明（可选）")
 
 
+SAP_STATUS_DECLARED = "estimand_declared"
+SAP_STATUS_EXPLORATORY = "exploratory"
+
+class IntercurrentEvent(BaseModel):
+    """伴发事件及其处理策略（ICH E9(R1) 五选一）。"""
+
+    event: str = Field(default="", description="伴发事件描述")
+    strategy: Literal[
+        "treatment-policy",
+        "hypothetical",
+        "composite",
+        "while-on-treatment",
+        "principal-stratum",
+    ] = Field(default="treatment-policy", description="处理策略")
+
+
+class EstimandSpec(BaseModel):
+    """估计目标五要素；字段全部允许留空，完整性由宿主判定。"""
+
+    population: str = Field(default="", description="目标人群")
+    variable: str = Field(default="", description="结局变量")
+    treatment: str = Field(default="", description="处理与对照")
+    intercurrent_events: list[IntercurrentEvent] = Field(
+        default_factory=list, description="伴发事件及策略；无伴发事件时为空列表"
+    )
+    summary_measure: str = Field(default="", description="群体水平汇总指标")
+
+
 class AnalysisPlan(BaseModel):
     message: str = Field(description="给用户的方案说明")
     steps: list[PlanStep] = Field(description="按执行顺序排列的分析步骤")
     options: list[PlanOption] = Field(
         default_factory=list, description="给用户的可选项（必须含 confirm）"
     )
+    estimand: EstimandSpec | None = Field(
+        default=None, description="估计目标；模型无法确定时可缺省"
+    )
+    # 043 输入守卫：模型自检输入是否与统计任务无关（无关时不进入方案流程，省 token）
+    off_topic: bool = Field(default=False, description="输入与统计分析任务无关时为 true")
+    off_topic_reason: str = Field(default="", description="off_topic 为 true 时的一句话说明")
 
     def method_summary(self) -> str:
         return " -> ".join(f"{s.title}({s.method})" for s in self.steps)
+
+
+def sap_status_of(plan: AnalysisPlan) -> str:
+    """宿主判定分析性质：四文本要素齐全才算「已声明估计目标」。
+
+    注意：即使齐全也不代表事前注册或 SAP 冻结，措辞不得写成确证性分析。
+    """
+    estimand = plan.estimand
+    if estimand is None:
+        return SAP_STATUS_EXPLORATORY
+    factors = (
+        estimand.population,
+        estimand.variable,
+        estimand.treatment,
+        estimand.summary_measure,
+    )
+    return SAP_STATUS_DECLARED if all(str(item).strip() for item in factors) else SAP_STATUS_EXPLORATORY
 
 
 _BASE_INSTRUCT = (
     "你是面向数据研究者的数据分析方案设计师。按以下链条拆解统计任务，每一步都显式说明依据：\n"
     "1) 定性统计任务 sta_task：描述 / 关联 / 因果 / 预测 / 决策（先想清楚『问什么』）；\n"
     "2) 明确变量槽位：分组变量（group_column/group_by）与值变量（target_columns），必须来自数据画像列名；\n"
+    "   用户要求「按类别分别看分布/每个类别一张图」时，用 describe + chart_type=histogram，"
+    "并把该类别列填进 params.group_by（宿主会按组面板绘制）；\n"
+    "   **target_columns 只放该工具 accepts 允许的类型**：类别型/二值列（如「是否手术」「手术方式」）通常是"
+    "分组或分层变量，应放进 params.group_column（或 group_by），不要当 target；若本意是比较组间率/构成，"
+    "改用 chi_square 这类接受类别列的工具；\n"
     "3) 从『可用统计工具目录』选择 method（注意每个方法的 applicability 适用条件），"
     "params 必填槽位必须按目录给全（缺参会被宿主拒绝）；\n"
     "4) 检验策略由执行期自动完成（正态性 → 方差齐性 → 最优/次优方法），"
@@ -83,6 +165,11 @@ _BASE_INSTRUCT = (
     "6) 显著性规范：默认 α=0.05，多组两两比较将按 Holm 校正；如数据特征建议其他 α 或校正方式，在 message 中说明；\n"
     "7) options 给出 2–4 个行动选项，必须包含一个 action=confirm 的执行选项，"
     "可按需给出 revise（换方法）/explain（解释依据）/supplement（补充对话）；\n"
+    "8) 估计目标 Estimand（ICH E9(R1)，可选）：尽量给出 population（目标人群）、variable（结局变量）、"
+    "treatment（处理与对照）、intercurrent_events（伴发事件及策略：treatment-policy/hypothetical/"
+    "composite/while-on-treatment/principal-stratum）、summary_measure（群体水平汇总指标）；"
+    "无法从用户诉求与画像中确定时留空，禁止编造人群、干预与伴发事件；"
+    "summary_measure 须与所选方法一致（均值差对应 t/ANOVA，HR 对应 Cox，率差对应卡方）；\n"
     "message 用简体中文说明方案思路、预期产出与显著性判断建议。"
 )
 
@@ -91,11 +178,30 @@ _OUTPUT_FIELDS = {
     "steps": (
         list,
         "步骤数组，每项含 title(str)/method(工具目录中的 name)/"
-        "target_columns(list[str])/chart_type(该工具 charts 之一或 none)/params(object，必填项见工具目录)",
+        "target_columns(list[str]，只放该工具 accepts 允许的类型；分组/分层列放 params.group_column)/"
+        "chart_type(该工具 charts 之一或 none)/params(object，必填项见工具目录)/"
+        "rationale(str，**必填**：一句话说明数据类型/样本特征/方法与参数为何适用；"
+        "缺失会被宿主拒绝)/depends_on(list[int]，可选：依赖的前序步骤下标，0 起)",
     ),
     "options": (
         list,
-        "行动选项数组，每项含 id(str, 唯一)/label(str)/action(confirm|revise|explain|custom|supplement)/description(str)",
+        "行动选项数组，每项含 id(str, 唯一)/label(str)/"
+        "action(confirm|revise|explain|custom|supplement)/description(str)",
+    ),
+    "off_topic": (
+        bool,
+        "输入与统计分析任务无关（闲聊、写作、翻译、代码等）时为 true；统计需求恒为 false",
+    ),
+    "off_topic_reason": (
+        str,
+        "off_topic 为 true 时的一句话说明（引导用户描述统计需求），否则留空",
+    ),
+    "estimand": (
+        object,
+        "可选：估计目标五要素。population(str 目标人群)/variable(str 结局变量)/"
+        "treatment(str 处理与对照)/intercurrent_events(list，每项含 event(str) 与 "
+        "strategy(treatment-policy|hypothetical|composite|while-on-treatment|principal-stratum))/"
+        "summary_measure(str 群体水平汇总指标)。无法确定时留空，不要编造",
     ),
 }
 
@@ -127,16 +233,22 @@ class DiscussionAgent:
         if revision_note:
             instruct += f"\n用户修正意见（必须遵守）：{revision_note}"
         catalog = json.dumps(tool_catalog(), ensure_ascii=False)
+        skills = skills_for_request(user_request)
         types_summary = json.dumps(
             {name: col.type for name, col in profile.columns.items()}, ensure_ascii=False
         )
         info = (
             f"数据画像：{profile.model_dump_json()}\n"
             f"列变量类型（continuous 连续/ordinal 等级/categorical 类别/index 索引）：{types_summary}\n"
-            f"可用统计工具目录（JSON）：{catalog}"
+            f"可用统计工具目录（JSON）：{catalog}\n"
+            f"方法学要点（内置统计 skills，须遵守；与工具目录冲突时以工具目录为准）：\n{skills}"
         )
         request = self._build_request()
         plan = request(input=user_request, info=info, instruct=instruct)
+        # 模型偶尔漏填 rationale：先补一轮「只补依据」的请求，避免整份方案被判无效
+        plan = self._ensure_rationales(
+            plan, request_factory=self._build_request, info=info, user_request=user_request
+        )
         self._validate_plan(plan, profile)
         _assign_step_ids(plan)
         plan.options = _normalize_options(plan.options)
@@ -160,13 +272,15 @@ class DiscussionAgent:
         if revision_note:
             instruct += f"\n用户修正意见（必须遵守）：{revision_note}"
         catalog = json.dumps(tool_catalog(), ensure_ascii=False)
+        skills = skills_for_request(user_request)
         types_summary = json.dumps(
             {name: col.type for name, col in profile.columns.items()}, ensure_ascii=False
         )
         info = (
             f"数据画像：{profile.model_dump_json()}\n"
             f"列变量类型（continuous 连续/ordinal 等级/categorical 类别/index 索引）：{types_summary}\n"
-            f"可用统计工具目录（JSON）：{catalog}"
+            f"可用统计工具目录（JSON）：{catalog}\n"
+            f"方法学要点（内置统计 skills，须遵守；与工具目录冲突时以工具目录为准）：\n{skills}"
         )
         plan = await gateway.request_structured_stream(
             AnalysisPlan,
@@ -176,18 +290,90 @@ class DiscussionAgent:
             instruct=instruct,
             on_delta=on_delta,
         )
+        plan = cast(AnalysisPlan, plan)
+        plan = cast(
+            AnalysisPlan,
+            await asyncio.to_thread(
+                self._ensure_rationales,
+                plan,
+                self._build_request,
+                info,
+                user_request,
+            ),
+        )
         self._validate_plan(plan, profile)
         _assign_step_ids(plan)
         plan.options = _normalize_options(plan.options)
         return plan
 
+    def match_chain_slots(
+        self, *, recipe: Any, candidates: dict[str, list[str]], profile: TableProfile
+    ) -> dict[str, str]:
+        """工作链模板占位匹配（047 后续）：模型在宿主候选集内挑选真实列。"""
+        from medsta.agents.chain_match import ChainMatchAgent
+
+        agent = ChainMatchAgent(self._gateway)
+        return agent.match(
+            recipe=recipe,
+            candidates=candidates,
+            profile_json=profile.model_dump_json(),
+        )
+
+    def amend_step(
+        self,
+        *,
+        profile: TableProfile,
+        plan: AnalysisPlan,
+        index: int,
+        error: dict | None = None,
+        note: str = "",
+        context: str = "",
+    ) -> PlanStep:
+        """定点修正单个节点：把「已确认的工作流 + 该节点 + 失败原因 + 用户补充」交给模型。
+
+        只允许返回一个 steps 元素（该节点），宿主校验通过后由调用方就地替换并重跑，
+        图结构与其它节点不受影响——这是「报错后接续分析」的关键出口。
+        """
+        from medsta.agents.flow import plan_flow
+
+        step = plan.steps[index]
+        catalog = json.dumps(tool_catalog(), ensure_ascii=False)
+        skills = skills_for_request(f"{note} {step.title} {step.method}")
+        types_summary = json.dumps(
+            {name: col.type for name, col in profile.columns.items()}, ensure_ascii=False
+        )
+        instruct = (
+            _BASE_INSTRUCT
+            + "\n【定点修正】这是对已有工作流中单个节点的修正：steps 只输出 1 个元素（修正后的该节点），"
+            "不得增删其它节点，不得改变该节点在流程中的位置；参数与目标列必须来自工具目录与数据画像。"
+        )
+        info = (
+            f"数据画像：{profile.model_dump_json()}\n"
+            f"列变量类型：{types_summary}\n"
+            f"可用统计工具目录（JSON）：{catalog}\n"
+            f"当前工作流节点：{json.dumps(plan_flow(plan)['nodes'], ensure_ascii=False)}\n"
+            f"待修正节点（序号 {index + 1}）：{step.model_dump_json()}\n"
+            f"该节点失败信息：{json.dumps(error or {}, ensure_ascii=False)}\n"
+            + (f"会话上下文（进度与补充）：\n{context}\n" if context else "")
+            + f"用户补充说明：{note or '（无）'}\n"
+            + f"方法学要点（内置统计 skills，须遵守）：\n{skills}"
+        )
+        request = self._build_request()
+        amended = request(input="修正该节点后重新执行", info=info, instruct=instruct)
+        if not amended.steps:
+            raise ValueError("模型未返回修正后的节点")
+        new_step = amended.steps[0]
+        self._validate_plan(AnalysisPlan(message="amend", steps=[new_step]), profile)
+        return new_step
+
     def _build_request(self) -> Callable[..., AnalysisPlan]:
         if self._request_factory is not None:
             fake = self._request_factory()
             return lambda *, input, info, instruct: self._run(fake, input, info, instruct)
-        assert self._gateway is not None, "需要 gateway 或 request_factory 之一"
+        gateway = self._gateway
+        assert gateway is not None, "需要 gateway 或 request_factory 之一"
         return lambda *, input, info, instruct: self._run_gateway(
-            self._gateway, input, info, instruct
+            gateway, input, info, instruct
         )
 
     @staticmethod
@@ -207,9 +393,52 @@ class DiscussionAgent:
         gateway: ModelGateway, input: str, info: str, instruct: str
     ) -> AnalysisPlan:
         fields = _OUTPUT_FIELDS
-        return gateway.request_structured(
-            AnalysisPlan, fields=fields, input=input, info=info, instruct=instruct
+        return cast(
+            AnalysisPlan,
+            gateway.request_structured(
+                AnalysisPlan, fields=fields, input=input, info=info, instruct=instruct
+            ),
         )
+
+    @staticmethod
+    def _ensure_rationales(
+        plan: AnalysisPlan,
+        request_factory: Callable[[], Callable[..., AnalysisPlan]],
+        info: str,
+        user_request: str,
+    ) -> AnalysisPlan:
+        """缺 rationale 的步骤自动补一轮（模型写依据，宿主只做合并；硬门不变）。
+
+        背景：`_OUTPUT_FIELDS` 曾未列出 rationale，模型偶发全部漏填，
+        整份方案被判 INVALID_PLAN——用户看到 6 条「缺少选择依据」却无从修改。
+        """
+        missing = [
+            index for index, step in enumerate(plan.steps) if not str(step.rationale).strip()
+        ]
+        if not missing:
+            return plan
+        repair_instruct = (
+            _BASE_INSTRUCT
+            + "\n【补齐依据】上一版方案有步骤缺 rationale：请**原样**返回同样的步骤序列（顺序、数量一致），"
+            "只为每个步骤补写 rationale（一句话说明数据类型/样本特征/方法与参数为何适用）；"
+            "method/target_columns/params/chart_type 一律不得改动。"
+        )
+        repair_info = (
+            f"{info}\n"
+            f"待补依据的方案（JSON）：{plan.model_dump_json()}\n"
+            f"缺依据的步骤序号（1 起）：{[index + 1 for index in missing]}"
+        )
+        try:
+            request = request_factory()
+            repaired = request(input=user_request, info=repair_info, instruct=repair_instruct)
+        except Exception:  # 补全失败：保守返回原方案，由硬门给出原有错误
+            return plan
+        if len(repaired.steps) != len(plan.steps):
+            return plan
+        for before, after in zip(plan.steps, repaired.steps):
+            if not str(before.rationale).strip() and str(after.rationale).strip():
+                before.rationale = after.rationale
+        return plan
 
     @staticmethod
     def _validate_plan(plan: AnalysisPlan, profile: TableProfile) -> None:

@@ -1,7 +1,6 @@
 """013 槽位化工具与检验策略链测试。"""
 import numpy as np
 import pandas as pd
-import pytest
 
 from medsta.agents.discussion import PlanStep
 from medsta.stats.registry import execute_step, tool_catalog, validate_step

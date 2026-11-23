@@ -8,9 +8,10 @@ Owner 划分（见 docs/design-notes.md）：
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import agently
 from agently.types.settings import OpenAICompatibleSettings
@@ -33,7 +34,7 @@ class ProviderConfig:
     timeout: float = 120.0
 
     @classmethod
-    def from_env(cls) -> "ProviderConfig":
+    def from_env(cls) -> ProviderConfig:
         # 未手动 export 时自动加载项目根 .env；不覆盖已显式设置的变量
         load_dotenv(_PROJECT_ROOT / ".env", override=False)
         base_url = os.environ.get("LLM_BASE_URL", "")
@@ -58,6 +59,31 @@ class ProviderConfig:
             model=model,
             timeout=float(os.environ.get("LLM_TIMEOUT", "120")),
         )
+
+
+_INTERPRET_MAX_SENTENCES = 5
+
+
+@dataclass(frozen=True)
+class InterpretConfig:
+    """结果解释开关与粒度：宿主确定性配置，测试可显式注入。"""
+
+    enabled: bool = True
+    max_sentences: int = 1
+
+    def __post_init__(self) -> None:
+        clamped = max(1, min(_INTERPRET_MAX_SENTENCES, int(self.max_sentences)))
+        object.__setattr__(self, "max_sentences", clamped)
+
+    @classmethod
+    def from_env(cls) -> InterpretConfig:
+        raw = os.environ.get("MEDSTA_INTERPRET", "1").strip().lower()
+        enabled = raw not in {"0", "false", "off", "no"}
+        try:
+            limit = int(os.environ.get("MEDSTA_INTERPRET_MAX_SENTENCES", "1"))
+        except ValueError:
+            limit = 1
+        return cls(enabled=enabled, max_sentences=limit)
 
 
 def build_settings(config: ProviderConfig, agently_facade: Any | None = None) -> Any:
@@ -189,6 +215,9 @@ def _extract_delta(chunk: Any) -> str:
         payload = json.loads(chunk)
         delta = payload["choices"][0]["delta"]
     except (ValueError, KeyError, IndexError, TypeError):
+        return ""
+    if not isinstance(delta, dict):
+        # 部分兼容端末 chunk 的 delta 为 null：此前 AttributeError 不在捕获元组（批次11）
         return ""
     piece = delta.get("reasoning_content") or delta.get("content") or ""
     return str(piece)

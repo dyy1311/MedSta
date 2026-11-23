@@ -39,7 +39,7 @@ export default function TypeReviewCard({ request, submitting, onConfirm }: Props
       <div className="space-y-2">
         {request.columns.map((col) => (
           <div key={col.name} className="flex items-center gap-2 rounded-lg bg-surface-page px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{col.name}</span>
+            <span className="min-w-0 flex-1 break-words text-sm font-medium text-ink">{col.name}</span>
             {col.missing > 0 && (
               <span className="text-[11px] text-warn">缺失 {col.missing}</span>
             )}
@@ -76,7 +76,7 @@ export default function TypeReviewCard({ request, submitting, onConfirm }: Props
       <button
         onClick={() => onConfirm(types)}
         disabled={submitting}
-        className="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-all hover:bg-primary-dark active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
+        className="mt-3 inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
       >
         <CheckCircle2 className="h-4 w-4" />
         {submitting ? "提交中…" : "确认类型，开始讨论"}

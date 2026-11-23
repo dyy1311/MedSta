@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import copy
 import io
+import json
 from urllib.parse import unquote
 
 import pandas as pd
 
 from medsta.session.manager import manager
-
 from tests.helpers import (
     PLAN_NO_TABLE,
+    PLAN_TABLE_ONLY,
     PLAN_WITH_CHART,
     collect_until,
     drive_to_review,
@@ -29,8 +30,10 @@ def test_csv_export_is_utf8_sig_and_matches_table(client, app, session_id: str) 
         assert step["table"]["columns"][:3] == ["column", "count", "mean"]
 
         resp = client.get(f"/export/{session_id}/0?format=csv")
-        assert client.get(f"/export/{session_id}/0?format=pdf").status_code == 400
+        assert client.get(f"/export/{session_id}/0?format=docx").status_code == 400
         assert client.get(f"/export/{session_id}/99?format=csv").status_code == 404
+        # 终审修复：负数下标（Python 会静默取末步）必须拒绝
+        assert client.get(f"/export/{session_id}/-1?format=csv").status_code == 404
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/csv")
@@ -116,3 +119,193 @@ def test_reports_are_scoped_per_session(client, app, session_id: str) -> None:
         assert client.get(f"/export/{other}/0?format=csv").status_code == 404
 
     assert other not in app.state.service.reports
+
+
+def _inject_formula_report(app, session_id: str) -> None:
+    """注入含公式注入载体的报告表格（模拟用户上传数据里的恶意标签）。"""
+    app.state.service.reports[session_id] = {
+        "steps": [
+            {
+                "title": "注入表",
+                "method": "describe",
+                "status": "success",
+                "table": {
+                    "columns": ["label", "value"],
+                    "rows": [
+                        {"label": "=cmd|' /C calc'!A0", "value": 1},
+                        {"label": "+2+3", "value": -5.5},
+                        {"label": "@SUM(A1)", "value": 2},
+                        {"label": "正常文本", "value": 3.5},
+                    ],
+                },
+                "result": {},
+                "artifact": None,
+                "error": None,
+            }
+        ]
+    }
+
+
+def test_csv_export_escapes_formula_prefixes(client, app, session_id: str) -> None:
+    """P1: CSV 导出对以 = + - @ 开头的文本单元格加 ' 前缀；纯数值（含负数）不动。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=csv")
+
+    assert resp.status_code == 200
+    frame = pd.read_csv(
+        io.BytesIO(resp.content), encoding="utf-8-sig", dtype=str, keep_default_na=False
+    )
+    labels = frame["label"].tolist()
+    assert labels[0].startswith("'=")
+    assert labels[1].startswith("'+")
+    assert labels[2].startswith("'@")
+    assert labels[3] == "正常文本"
+    # 数值列保持原样（负数不受影响；dtype=str 读回统一为浮点表示）
+    assert [float(v) for v in frame["value"].tolist()] == [1.0, -5.5, 2.0, 3.5]
+
+
+def test_xlsx_export_escapes_formula_prefixes(client, app, session_id: str) -> None:
+    """P1: XLSX 导出同样转义公式前缀（openpyxl 会把 = 开头字符串存为公式）。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=xlsx")
+
+    assert resp.status_code == 200
+    frame = pd.read_excel(io.BytesIO(resp.content), engine="openpyxl", dtype=str)
+    labels = frame["label"].tolist()
+    assert labels[0].startswith("'=")
+    assert not any(str(cell).startswith("=") for cell in labels)
+
+
+def _plan_describe(column: str) -> dict:
+    return {
+        "message": f"描述 {column}",
+        "steps": [
+            {
+                "title": f"分布统计 {column}",
+                "method": "describe",
+                "target_columns": [column],
+                "chart_type": "none",
+                "params": {},
+                "rationale": "连续变量先看分布",
+            }
+        ],
+        "options": [{"id": "go", "label": "按此执行", "action": "confirm"}],
+    }
+
+
+def test_export_by_report_id_targets_history_report(client, app, session_id: str) -> None:
+    """M2: 带 report_id 的导出定位对应历史报告；缺省仍取最新报告。"""
+    app.state.service.set_agent(fake_agent(_plan_describe("age")))
+    upload_csv(client, session_id)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        _, review1 = drive_to_review(ws)
+        rid1 = review1["report"]["report_id"]
+        ws.send_json({"type": "review", "decision": "revise", "content": "换一列"})
+        collect_until(ws, {"back_to_discussion"})
+
+    app.state.service.set_agent(fake_agent(_plan_describe("value")))
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_json({"type": "chat", "content": "看 value"})
+        collect_until(ws, {"plan"})
+        ws.send_json({"type": "confirm_plan"})
+        _, review2 = collect_until(ws, {"review_request"})
+        rid2 = review2["report"]["report_id"]
+
+    assert rid1 and rid2 and rid1 != rid2
+
+    def _wait(url: str, needle: bytes) -> bytes:
+        """后台执行与导出读内存报告之间可能有极短窗口：轮询而非一次断言。"""
+        import time
+
+        deadline = time.time() + 2.0
+        body = b""
+        while time.time() < deadline:
+            response = client.get(url)
+            assert response.status_code == 200
+            body = response.content
+            if needle in body:
+                return body
+            time.sleep(0.02)
+        return body
+
+    assert b"age" in _wait(f"/export/{session_id}/0?format=csv&report_id={rid1}", b"age")
+    assert b"value" in _wait(f"/export/{session_id}/0?format=csv&report_id={rid2}", b"value")
+    assert b"value" in _wait(f"/export/{session_id}/0?format=csv", b"value")  # 缺省 = 最新
+
+
+def test_export_step_as_json(client, app, session_id: str) -> None:
+    """B5: format=json 返回完整步骤 JSON（meta/table/result），严格 JSON 无 NaN。"""
+    _inject_formula_report(app, session_id)
+
+    resp = client.get(f"/export/{session_id}/0?format=json")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    payload = json.loads(resp.content.decode("utf-8"))
+    assert payload["meta"]["step_index"] == 0
+    assert payload["meta"]["tool"] == "describe"
+    assert payload["table"]["columns"] == ["label", "value"]
+    assert payload["result"] == {}
+
+
+def test_export_chart_formats(client, app, session_id: str) -> None:
+    """B6: 图导出支持 jpg/pdf/tif（按需重渲染），Content-Type 正确且内容非空。"""
+    app.state.service.set_agent(fake_agent(PLAN_WITH_CHART))
+    upload_csv(client, session_id)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)
+
+    for fmt, ctype in (("jpg", "image/jpeg"), ("pdf", "application/pdf"), ("tif", "image/tiff")):
+        resp = client.get(f"/export/{session_id}/0?format={fmt}")
+        assert resp.status_code == 200, fmt
+        assert resp.headers["content-type"].startswith(ctype), fmt
+        assert len(resp.content) > 1000, fmt
+
+    # 无图步骤导出图格式 → 404。审查修复后执行/审阅期 chat 被 SESSION_BUSY 拒绝
+    # （不再降级状态机），须先 accept 交付首份报告，再在交付态讨论新方案。
+    # 注意：交付态 chat 是否转答疑取决于 interpret_agent——conftest 已隔离
+    # 真实网关（默认 None）；此处仍显式注入 None 作为双保险，确保交付态
+    # chat 走方案生成而非答疑（与 test_qa_flow 注入假解释器对称）。
+    app.state.service.set_agent(fake_agent(PLAN_TABLE_ONLY))
+    app.state.service.set_interpret_agent(None)
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_json({"type": "review", "decision": "accept"})
+        collect_until(ws, {"delivered"})
+        ws.send_json({"type": "chat", "content": "只出统计表"})
+        _, plan_event = collect_until(ws, {"plan"})
+        assert plan_event["steps"][0]["method"] == "describe"
+        ws.send_json({"type": "confirm_plan"})
+        collect_until(ws, {"review_request"})
+    assert client.get(f"/export/{session_id}/0?format=pdf").status_code == 404
+
+
+def test_revise_triggers_replan_with_note(tmp_path) -> None:
+    """用户实测缺陷: 提交修正意见后毫无反应，重复点提交还报 NO_ACTIVE_RUN。
+
+    现在 revise 带 note 时自动接续讨论：先 back_to_discussion，再由模型按修正意见重出方案。
+    """
+    from fastapi.testclient import TestClient
+
+    from medsta.app import create_app
+    from medsta.session.manager import manager
+    from tests.helpers import PLAN_TABLE_ONLY, collect_until, drive_to_review, fake_agent, upload_csv
+
+    manager.clear()
+    client = TestClient(create_app(data_root=tmp_path / "sessions"))
+    client.app.state.service.set_agent(fake_agent(PLAN_TABLE_ONLY))
+    session_id = client.post("/sessions").json()["session_id"]
+    upload_csv(client, session_id)
+
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        drive_to_review(ws)
+        ws.send_json({"type": "review", "decision": "revise", "content": "每个类别做一张图"})
+        frames, plan = collect_until(ws, {"plan", "error"})
+
+    kinds = [frame.get("type") for frame in frames]
+    assert "back_to_discussion" in kinds, "修正后应先回到讨论态"
+    assert plan["type"] == "plan", f"应自动生成新方案，实际：{plan}"
+    assert plan["steps"], "新方案不能为空"
+    # 新方案已落库到会话上下文（刷新后可回放）
+    assert client.app.state.service._plans.get(session_id) is not None

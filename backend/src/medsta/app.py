@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import os
 import pathlib
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from medsta.api.routes_capabilities import router as capabilities_router
 from medsta.api.routes_data import router as data_router
 from medsta.api.routes_export import router as export_router
+from medsta.api.routes_report import router as report_router
 from medsta.api.routes_session import router as session_router
+from medsta.api.routes_templates import router as templates_router
 from medsta.api.ws import router as ws_router
+from medsta.session.manager import manager
 from medsta.session.service import SessionService
 
 # prod 模式前端构建产物（launcher --prod 构建后生效；dev 模式通常不存在）
@@ -21,9 +25,20 @@ FRONTEND_DIST = pathlib.Path(__file__).resolve().parents[3] / "frontend" / "dist
 
 # SPA catch-all 豁免的 API/文档前缀
 _API_PREFIXES = (
-    "/health", "/sessions", "/data", "/ws", "/capabilities", "/export",
+    "/health", "/sessions", "/data", "/ws", "/capabilities", "/export", "/templates",
+    "/report",
     "/docs", "/openapi.json", "/redoc",
 )
+
+# 鉴权中间件放行的「静态外壳」路径：SPA 入口与构建产物自身不含业务数据，
+# 若也要求令牌，浏览器无法加载登录页/脚本（prod 单端口 + 鉴权会整页 401 白屏）。
+_PUBLIC_EXACT = {"/", "/index.html", "/favicon.ico", "/health"}
+_PUBLIC_PREFIXES = ("/assets/",)
+
+
+def _is_public_shell(path: str) -> bool:
+    """静态外壳路径判定（仅 SPA 入口与前端构建产物）。"""
+    return path in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES)
 
 
 def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
@@ -31,34 +46,133 @@ def _build_service(data_root: pathlib.Path | None = None) -> SessionService:
     from agently.core.storage import LocalRecordStore
 
     from medsta.agents.discussion import DiscussionAgent
-    from medsta.config import build_gateway
+    from medsta.agents.interpretation import InterpretationAgent
+    from medsta.agents.type_advisor import ColumnTypeAdvisor
+    from medsta.config import InterpretConfig, build_gateway
 
     root = data_root or pathlib.Path(os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
     record_store = LocalRecordStore(root=str(root.parent / "records"))
+    interpret_config = InterpretConfig.from_env()
     try:
-        agent: DiscussionAgent | None = DiscussionAgent(gateway=build_gateway())
+        gateway = build_gateway()
+        agent: DiscussionAgent | None = DiscussionAgent(gateway=gateway)
+        interpret_agent: InterpretationAgent | None = InterpretationAgent(gateway=gateway)
+        advisor: ColumnTypeAdvisor | None = ColumnTypeAdvisor(gateway=gateway)
     except RuntimeError:
         agent = None
-    return SessionService(record_store=record_store, data_root=root, agent=agent)
+        interpret_agent = None
+        advisor = None
+    return SessionService(
+        record_store=record_store,
+        data_root=root,
+        agent=agent,
+        interpret_agent=interpret_agent,
+        interpret_config=interpret_config,
+        type_advisor=advisor,
+    )
 
 
 def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
     app = FastAPI(title="MedSta", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+
+    # 038/044 鉴权：MEDSTA_USERS（多用户，优先）或 MEDSTA_AUTH_TOKEN（单令牌）；
+    # 两者都未配置时行为与现状完全一致（零开销直通，owner="local"）
+    medsta_users: dict[str, str] = {}
+    for pair in (os.environ.get("MEDSTA_USERS") or "").split(","):
+        if ":" in pair:
+            name, _, password = pair.partition(":")
+            if name.strip() and password:
+                medsta_users[name.strip()] = password
+    app.state.medsta_users = medsta_users or None
+    app.state.user_tokens = {}
+    auth_token = (os.environ.get("MEDSTA_AUTH_TOKEN") or "").strip()
+    app.state.auth_token = None if medsta_users else (auth_token or None)
+    if not app.state.auth_token and not medsta_users:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    @app.middleware("http")
+    async def auth_guard(request: Request, call_next):
+        if app.state.medsta_users:
+            # 044 多用户模式：/auth/login 与静态外壳豁免；其余要求有效令牌并注入身份
+            if (
+                request.url.path == "/auth/login"
+                or _is_public_shell(request.url.path)
+            ):
+                return await call_next(request)
+            provided = (
+                request.headers.get("X-Auth-Token")
+                # 直链（图片/下载）无法携带请求头：与 WS 同口径支持 ?token=
+                or request.query_params.get("token")
+                or ""
+            )
+            if not provided:
+                bearer = request.headers.get("Authorization") or ""
+                if bearer.startswith("Bearer "):
+                    provided = bearer[len("Bearer "):].strip()
+            username = app.state.user_tokens.get(provided)
+            if username is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "未登录或令牌已失效", "hint": "请重新登录"},
+                )
+            request.state.username = username
+            # 会话归属隔离：/sessions|export|report|data/{sid}** 非 owner 一律 404
+            parts = request.url.path.strip("/").split("/")
+            # 批次13 集合级动作（作用于本人全部会话，非单会话资源）：
+            # 已通过令牌校验，无会话归属可查，跳过 404 判定
+            collection_actions = {("sessions", "cleanup_duplicates")}
+            if (
+                len(parts) >= 2
+                and parts[0] in ("sessions", "export", "report", "data")
+                and (parts[0], parts[1]) not in collection_actions
+            ):
+                session = manager.get(parts[1])
+                if session is None or session.owner != username:
+                    return JSONResponse(status_code=404, content={"detail": "会话不存在"})
+            return await call_next(request)
+        # 038 单令牌模式（USERS 未配置时保持原行为）
+        token: str | None = getattr(app.state, "auth_token", None)
+        if token:
+            provided = (
+                request.headers.get("X-Auth-Token")
+                # 直链（图片/下载）无法携带请求头：与 WS 同口径支持 ?token=
+                or request.query_params.get("token")
+                or ""
+            )
+            if not provided:
+                bearer = request.headers.get("Authorization") or ""
+                if bearer.startswith("Bearer "):
+                    provided = bearer[len("Bearer "):].strip()
+            if provided != token and not _is_public_shell(request.url.path):
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": "缺少或错误的访问令牌",
+                        "hint": "请求需携带 X-Auth-Token 或 Authorization: Bearer <token>",
+                    },
+                )
+            request.state.username = "local"
+        else:
+            request.state.username = "local"
+        return await call_next(request)
+
     app.include_router(session_router)
     app.include_router(data_router)
     app.include_router(capabilities_router)
     app.include_router(export_router)
+    app.include_router(templates_router)
+    app.include_router(report_router)
     app.include_router(ws_router)
 
     root = pathlib.Path(data_root or os.environ.get("MEDSTA_DATA_ROOT", "data/sessions"))
     app.state.data_root = root
     app.state.service = _build_service(root)
+    app.state.service.restore_all()  # 032：从快照恢复历史会话
 
     root.mkdir(parents=True, exist_ok=True)
     app.mount("/data", StaticFiles(directory=str(root)), name="data")
@@ -80,12 +194,34 @@ def create_app(data_root: str | pathlib.Path | None = None) -> FastAPI:
                 from fastapi import HTTPException
 
                 raise HTTPException(status_code=404, detail="Not Found")
-            candidate = FRONTEND_DIST / spa_path
-            if spa_path and candidate.is_file():
+            # 路径穿越防护：URL 编码的 ..（%2F/%2E）会进入 spa_path，
+            # 解析后的真实路径必须仍位于 dist 目录内，否则回退 SPA 入口
+            candidate = (FRONTEND_DIST / spa_path).resolve()
+            if (
+                spa_path
+                and candidate.is_file()
+                and candidate.is_relative_to(FRONTEND_DIST.resolve())
+            ):
                 return FileResponse(candidate)
             return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
 
 
-app = create_app()
+# 模块级 app 的类型声明：实际由下方 __getattr__ 惰性构建（PEP 562）
+app: FastAPI
+
+
+def __getattr__(name: str) -> Any:
+    """模块级 app 惰性构建（审查修复 P2）。
+
+    导入 medsta.app（如测试取 create_app）不再触发真实数据根的
+    restore_all / 目录创建 / 网关构建副作用；uvicorn 的
+    "medsta.app:app" 字符串目标在首次取属性时才构建，并 memoize
+    到模块字典供后续访问。
+    """
+    if name == "app":
+        instance = create_app()
+        globals()["app"] = instance  # memoize：后续访问不再走 __getattr__
+        return instance
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

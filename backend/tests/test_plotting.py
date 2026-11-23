@@ -11,7 +11,6 @@ from medsta.agents.discussion import PlanStep
 from medsta.stats import plotting
 from medsta.stats.registry import CHART_TYPES, get_tool
 
-
 CHART_CASES = [
     ("histogram", "describe", ["value"], {}),
     ("boxplot", "group_compare", ["value"], {"group_column": "group"}),
@@ -24,7 +23,17 @@ CHART_CASES = [
     ("qq_plot", "normality_test", ["value"], {}),
     ("residual_plot", "regression", ["value"], {"target": "value", "features": ["age"]}),
     ("pie", "describe", ["group"], {}),
+    ("survival_curve", "survival_analysis", ["visit"], {}),
 ]
+
+_SURVIVAL_RESULT = {
+    "time_column": "visit",
+    "points": [
+        {"time": 1.0, "survival": 0.9, "censored": 0},
+        {"time": 2.0, "survival": 0.75, "censored": 1},
+        {"time": 3.0, "survival": 0.5, "censored": 0},
+    ],
+}
 
 
 def _step(chart: str, method: str, targets: list[str], params: dict) -> PlanStep:
@@ -50,9 +59,10 @@ def test_every_chart_type_renders_valid_png(sample_df, tmp_path) -> None:
     """B14: 11 类图表均产出可用的 PNG（文件名含类型、>1KB、无缺字警告）。"""
     for index, (chart, method, targets, params) in enumerate(CHART_CASES):
         step = _step(chart, method, targets, params)
+        extra = _SURVIVAL_RESULT if chart == "survival_curve" else None
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            path = plotting.render_chart(sample_df, step, tmp_path, index)
+            path = plotting.render_chart(sample_df, step, tmp_path, index, result=extra)
 
         assert path.is_file(), chart
         assert path.name.endswith(f"_{chart}.png"), path.name
@@ -110,6 +120,12 @@ def test_render_combined_builds_single_canvas(sample_df, tmp_path) -> None:
     assert combined.stat().st_size > max(first.stat().st_size, second.stat().st_size)
 
 
+def test_render_combined_rejects_fewer_than_two(tmp_path) -> None:
+    """空列表或单图不能进 matplotlib 的 subplots(0, 2)。"""
+    with pytest.raises(ValueError, match="至少需要 2 张"):
+        plotting.render_combined([], tmp_path)
+
+
 def test_unknown_chart_and_missing_group_are_rejected(sample_df, tmp_path) -> None:
     """B14: 未知图表/缺分组参数显式报错，而不是画出空图。"""
     from types import SimpleNamespace
@@ -128,6 +144,33 @@ def test_unknown_chart_and_missing_group_are_rejected(sample_df, tmp_path) -> No
         plotting.render_chart(
             sample_df, _step("grouped_bar", "describe", ["value"], {}), tmp_path, 0
         )
+
+
+def test_grouped_bar_categorical_uses_contingency_counts(tmp_path) -> None:
+    """修复回归：分类列的分组柱状图按列联表计数绘制（此前误用均值路径画空图）。"""
+    frame = pd.DataFrame(
+        {"有无空洞": ["0", "1", "0", "1"], "大小便障碍": ["0", "1", "0", "1"]}
+    )
+    step = _step(
+        "grouped_bar",
+        "chi_square",
+        ["有无空洞", "大小便障碍"],
+        {"row_column": "有无空洞", "col_column": "大小便障碍"},
+    )
+    result = {
+        "table": {
+            "columns": ["有无空洞", "0", "1"],
+            "rows": [
+                {"有无空洞": "0", "0": 5, "1": 22},
+                {"有无空洞": "1", "0": 14, "1": 9},
+            ],
+        }
+    }
+
+    path = plotting.render_chart(frame, step, tmp_path, 0, result=result)
+
+    assert path.is_file()
+    assert path.stat().st_size > 1000
 
 
 def test_default_chart_mapping_by_column_type() -> None:
@@ -163,3 +206,32 @@ def test_every_registered_tool_chart_is_renderable_or_declared() -> None:
         assert spec is not None
         unknown = set(spec.charts) - set(CHART_TYPES) - {"none"}
         assert unknown == set(), f"{method}: {unknown}"
+
+
+def test_histogram_facets_by_group_column(tmp_path) -> None:
+    """用户要求「每个类别做一张图」：histogram + group_by 时按组面板绘制（一张产物）。"""
+    df = pd.DataFrame(
+        {
+            "group": ["A"] * 20 + ["B"] * 20,
+            "value": list(np.linspace(1, 5, 20)) + list(np.linspace(3, 9, 20)),
+        }
+    )
+    step = _step("histogram", "describe", ["value"], {"group_by": "group"})
+
+    path = plotting.render_chart(df, step, tmp_path, 0)
+
+    assert path.exists() and path.stat().st_size > 0
+    # 断言标题进的是「总标题」而不是只覆盖第一个面板：读回图像尺寸作为弱校验
+    from PIL import Image
+
+    with Image.open(path) as image:
+        assert image.width > 600, "分面图应比单图更宽"
+
+
+def test_histogram_falls_back_when_group_has_single_value(tmp_path) -> None:
+    """组数不足或只有一组时退回总体直方图（不产生空面板）。"""
+    df = pd.DataFrame({"group": ["A"] * 10, "value": list(np.linspace(1, 5, 10))})
+    step = _step("histogram", "describe", ["value"], {"group_by": "group"})
+
+    path = plotting.render_chart(df, step, tmp_path, 0)
+    assert path.exists()

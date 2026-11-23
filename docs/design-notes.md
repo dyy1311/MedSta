@@ -33,6 +33,14 @@
 会话状态：`discussing（讨论态）→ plan_confirmed（方案确认）→ executing（执行中）→ delivered（已交付）→（修正意见）→ discussing`。
 状态由宿主 `SessionManager` 管理（确定性状态机，非模型决策）；模型只参与 discussing 态的内容生成。
 
+**转移表强约束（2026-10-24 审查修复）**：`manager.transition` 此前是无条件赋值——状态机只存在于注释里，
+存在两条实际可触发的非法路径：DELIVERED 态 `confirm_plan` 会用残留的 `session.plan` 直接重跑旧方案；
+PLAN_CONFIRMED 期重复 confirm 会重复下发 `chart_config`。现以 `_ALLOWED_TRANSITIONS`
+（源状态 → 允许目标集合）在 `manager.py` 宿主侧强约束：DISCUSSING→{DISCUSSING, PLAN_CONFIRMED, EXECUTING}、
+PLAN_CONFIRMED→{EXECUTING, DISCUSSING}、EXECUTING→{DELIVERED, DISCUSSING}、
+DELIVERED→{DISCUSSING, DELIVERED}。非法转移抛 `InvalidStateTransition(ValueError)`，
+由 `service.handle` 统一转换为 `PROTOCOL_UNSUPPORTED` 错误帧（协议顺序错误语义，manager 不依赖 errors 模块保持分层）。
+
 ## 5. 流式与持久化策略
 
 - WebSocket 推送讨论消息、pipeline 步骤进度、artifact 就绪事件。
@@ -92,3 +100,223 @@
   通过 `COVERAGE_MIN=99` 实测过失败会立即中断并透传非零退出码。
 - **推送与保护分离**：代码推送到 `main` 后 Actions 自动运行；分支保护（CI 必过）属于仓库设置，
   脚本无法代劳，需在 GitHub 后台手动开启。
+
+## 10. 结果解释与交付后答疑（spec 022）
+
+- **因果守卫是合规安全守卫，不是语义路由**：它拦的是「治疗组导致结局改善」这类会被用户当作临床结论的断言，
+  属于与 schema 校验同类的确定性红线，而非「用正则判断模型在想什么」。实现按「因素/干预/治疗/用药/分组/暴露/变量/指标
+  + 0–12 字 + 导致/引起/造成/使得/决定/证明/致使」匹配，并对匹配串及前 12 字内的否定词
+  （不能/无法/不足以/并不/未/不应/不可/不代表/不等于）豁免，保留「不能说明存在因果关系」这类正确表述。
+- **证据白名单而非整份 result**：`StepResult.result` 是各方法自行拼装的 dict，键不统一且可能含整张表。
+  宿主按 method 取固定键（见 `agents/interpretation.py::_SIMPLE_KEYS`），prompt 体积恒定在 1–2k tokens，
+  同时消除「模型自己算数」的机会。失败步骤也要给 `error.code/message`，否则无法解释「为什么没做成」。
+- **数值软标、因果硬门**：模型对 p 值做四舍五入（0.0287→0.03）是合法改写，误报会让角标失效；
+  因此数值走「允许集 + 四舍五入 + `p<0.001` 形式放行」后只标记不拒绝。因果断言零容忍：重试一次仍违规则整段不展示。
+- **解释是非阻塞增强项**：`review_request` 先发，解释后台生成后再推 `interpretation`；任何异常都静默丢弃，
+  绝不把 error 事件推给用户。用报告步骤签名 `[(method, title), ...]` 比对防串台（新执行覆盖旧报告时丢弃）。
+- **交付态路由归状态机**：不在 service 里新增 `revise_mode` 之类状态；`_on_chat` 读 `SessionStatus.DELIVERED`
+  决定答疑，`review {"decision":"revise"}` 读同一状态回讨论。前端只呈现，不决定服务端路由。
+- **句数控制由宿主截断**：提示词声明上限只是提高服从率，真正生效的是按 `[。！？]` 切分后取前 N 句；
+  不用英文句点，避免切坏小数。`MEDSTA_INTERPRET=0` 可整体关闭，`MEDSTA_INTERPRET_MAX_SENTENCES` 默认 1、clamp 到 1–5。
+
+## 11. 教材口径校准（spec 023）
+
+- **分布判定是单一入口**：`stats/descriptive.py::classify_distribution` 同时服务「描述指标推荐」与「参考值范围方法选择」，
+  避免两处规则漂移。四态而非两态：`insufficient` 单独列出，因为 n<3 或取值过少时任何正态性检验都不可靠，
+  给结论比给「非正态」更危险。
+- **离散数据的正态性检验不适用**：滴度、评分这类取值很少的列，Shapiro 会因连续假设被违反而拒绝。
+  判定时若对数变换后不同取值 ≤6 个，跳过 Shapiro 改用偏度；这是教材「对数变换后呈对称分布」的数值化近似。
+- **描述与描述性统计分离**：`describe` 保持七列不变（画像、导出、既有断言零波及），
+  完整口径进 `descriptive_stats`。两者分工写进工具目录 description，避免模型选错。
+- **区间必须与方法同源**：均值差区间用 t 临界值，自由度随方法变化（合并方差 df=n1+n2−2、Welch–Satterthwaite、配对 n−1）；
+  非参数方法不套用均值差区间，改报中位数差 + bootstrap。键名 `ci_target` 标明区间究竟是均值差还是中位数差。
+- **配对的前提检验对象是差值**：对原始两组做 Shapiro 会把「配对设计」当「独立两组」处理，
+  进而错选 Mann-Whitney U。配对非正态应走 Wilcoxon 符号秩。
+- **`method_note` 由宿主写入，不是模型生成**：文案集中在 `stats/notes.py`，`execute_step` 兜底挂载，
+  新增方法只要登记文案就自动生效；前端默认折叠，避免挤占结论区。
+- **教材例题作为外部基准**：`tests/test_textbook_conformance.py` 内联例 2-2/2-6/3-3/11-2 的原始数据与结果，
+  任何口径改动都会与教材数值对撞。例 11-2 的 r=0.801 恰在 0.8 分档边界（正文称「较高」、规则为「很高」），
+  测试只锁定 r 数值，分档用非边界数据验证。
+
+## 12. 第六至十章口径与教材/软件取舍（spec 024）
+
+- **教材优先、软件默认保留**：两独立样本方差齐性按教材用 F 检验（α=0.10）而非 Levene α=0.05；
+  ANOVA 事后默认 SNK-q 而非 Holm；四格表按 n 与最小期望频数三档判定而非「期望<5 比例」。
+  三处都在 `statistics-methods.md` 的对照表里写明，不静默替换，因为读者需要知道结论是按哪套口径得出的。
+- **教材未给公式时如实标注**：多组秩和事后在教材里只有一句「参考相关书籍」，实现采用 Dunn + Bonferroni，
+  并在 `method_note` 与多重性提醒里写明「教材未给公式，采用通用做法」，不冒充教材口径。
+- **SNK 逐步规则的可见性**：教材规定跨度最大的比较不显著时后续不再判定。实现保留全部原始 p 值，
+  另给 `significant` 与 `step_down` 标记，避免用户看到「p<0.05 却被判不显著」而无从解释。
+- **大样本正态判定不能只依赖 Shapiro**：1009 例基线数据实测中，年龄偏度仅 −0.16，但 Shapiro P=4.6e-07
+  （n 越大越敏感），导致推荐中位数。修正为：n≥500 时以偏度为主判据；同时新增「单一取值占比>50%」
+  判定，用于 VAS 这类两端堆积的评分（0 与 8 占多数），避免把离散堆积误判为正态。
+- **率的分子必须显式**：`chi_square` 的 `group_rates` 默认取列联表第一列，但列顺序由字符串排序决定
+  （「无效」可能排在「有效」前），因此新增 `event_value` 参数，并在输出 `rate_column` 标注，
+  避免「有效率」被算成「无效率」而不自知。
+- **布尔参数的向后兼容**：`chi_square.correction` 由 boolean 改为 choice（auto/yes/no），
+  `validate_step` 与 `normalize_params` 统一把 True/False 映射为 yes/no，旧计划不会因枚举变化被拒。
+
+## 13. 教材未给公式时的外部标准引入规则（spec 025）
+
+- **先确认「教材到底给了什么」再动手**：逐关键词检索后确认，Tukey/Dunnett/LSD/Scheffé 只在表 8-9
+  出现一次，析因与重复测量只在练习题选项与设计章节提及，检验效能只有 1−β 概念。
+  因此这些实现不能声称「按教材」，必须在 `method_note` 与 `statistics-methods.md` 标注外部依据。
+- **优先复用成熟实现，不手写统计分布**：Dunnett 直接用 `scipy.stats.dunnett`（多元 t 的单步检验），
+  析因用 `statsmodels.anova_lm(typ=2)`，重复测量用 `AnovaRM`，样本量用 `statsmodels.stats.power`。
+  只有 Tukey/LSD/Scheffé 这三个由 `studentized_range` 与 F/t 分布组合即可表达的，才写纯函数。
+- **Dunnett 的随机源必须固定**：`scipy.stats.dunnett` 内部含数值积分/模拟，同一份数据两次调用 p 值会差几个百分点
+  （实测 1.96e-4 vs 2.52e-4）。实现固定 `random_state=default_rng(20261023)`，测试用同一种子，
+  否则「结果可复现」这条硬门无法成立。
+- **事后比较不拆成独立工具**：四种方法共用同一次 ANOVA 的 `MS误差` 与 `df误差`，
+  拆分会导致重复计算、以及「用错误差项」的静默错误。因此并入 `anova.correction`，
+  并在 Kruskal 路径显式忽略参数方法、退回 Dunn。
+- **设计期工具允许没有目标列**：`sample_size` 的输入是研究设计参数而非数据，
+  `validate_step` 用 `_NO_TARGET_TOOLS` 豁免「至少一个目标列」，`min_rows=0`、`charts=()`，
+  避免为了满足校验而被迫填一个无关列。
+- **能力不足要说出来**：重复测量未做球形性校正（Mauchly/Greenhouse-Geisser 均未实现），
+  在 `sphericity_corrected=false`、`strategy.steps` 与 `method_note` 三处同时标注，而不是沉默。
+
+## 14. 生存分析的边界（spec 027）
+
+- **教材依据的存在性要先查实**：024/025 两轮我判断「教材无生存分析」，实际教材有第十四章（p.145）。
+  教训是核对范围不能只看目录前段——`grep` 关键词（生存分析/Cox/删失）比读目录可靠。
+  这也让 027 从「外部标准驱动」变为「教材口径驱动」，只有 RMST 与 PH 假设检验仍需外部依据。
+- **删失不是缺失值**：删失个体在删失前仍贡献风险集信息，不能删除也不能当事件处理。
+  这句话必须在 `method_note` 与策略链里说清楚，否则用户会把删失行当异常值删掉。
+- **同时间点的排序影响结果**：教材规定完全数据排在删失数据之前（§14-2），
+  实现用 `np.lexsort((event_priority, time))` 固化该规则；顺序反了会让风险集少一人，生存率系统性偏高。
+- **多组 log-rank 不能只算第一组**：`χ²` 要用 `g−1` 维 `O−E` 向量与协方差矩阵求二次型；
+  只对第一组求和会因各组方差被忽略而系统性偏大，这个问题在实现时容易看不见。
+- **`PHReg` 的 `llr` 是 `None`**：statsmodels 不提供现成的似然比统计量，必须自建零模型
+  `2*(llf_full−llf_null)`；直接取属性会得到 None 并静默错报。
+  同理 `schoenfeld_residuals` 是**属性**而非方法，调用会抛 `TypeError`。
+- **PH 假设不检验就等于默认成立**：Cox 的 HR 解释依赖比例风险假定，
+  违反时 HR 是时间平均的混合效应。实现对每个协变量做 Schoenfeld 残差与时间的 Spearman 相关，
+  `p<0.05` 时在策略链提示分层 Cox 或时依协变量，并标注该方法不在教材正文内。
+- **RMST 的 τ 决定可比性**：默认取各组最大随访时间的最小值，保证两组在同一时间窗内；
+  τ 超出某组随访时置 `truncated=True`，避免把「外推」当「观测」。
+
+## 15. 缺失数据路径（spec 028）
+
+- **教材 0 覆盖，必须标注外部依据**：缺失数据在教材中无任何章节，全部依据 Little & Rubin (2019) 与
+  van Buuren (2018)。`method_note` 与 `statistics-methods.md` 都写明「教材未覆盖」，不冒充教材口径。
+- **单数据集插补不是多重插补**：MICE 跑 m 次后取均值写出一份数据集，只能降低插补随机性，
+  不能恢复「插补不确定性」对标准误的贡献。实现输出 `between_imputation_variance` 作为相对指示，
+  并在字段、`method_note`、数据集名称三处声明；`capabilities.planned` 保留「完整 MI（Rubin 合并）未实现」。
+- **每次插补用不同随机种子**：`random_state + index`。若 m 次都用同一种子，结果完全相同，
+  `between_imputation_variance` 恒为 0，会给出「插补很确定」的错误信号。
+- **不自动切换 active 数据集**：`data_profile` 事件会 `setActiveWorkspaceId`，复用它会打断用户当前视图。
+  因此新增 `dataset_added` 事件，只追加标签页；用户手动切换才算真正换数据。
+- **`_artifact_dir` 是内部保留键**：`execute_step` 注入而非工具目录参数，模型不可填写；
+  未注入时 handler 不落盘但返回内存结果并提示，保证单元测试可直接调用 handler。
+- **缺失机制只给提示**：不做 Little's MCAR 检验。用缺失模式形态 + 分组缺失差异卡方给 `mechanism_hint`，
+  固定声明「不能仅凭数据断定 MCAR/MAR/MNAR」。把「提示」包装成「判定」会让用户误以为机制已被识别。
+- **LOCF 只进敏感性**：前向填充会系统性压缩方差、扭曲时间趋势，作为主分析结果会高估精度；
+  `sensitivity_only=true` 的方法一律不产出数据集。
+
+## 16. 估计目标与 SAP 边界（spec 029）
+
+- **教材 0 覆盖**：Estimand/SAP 在教材中无任何内容，全部依据 ICH E9(R1)。文案标注来源，不冒充教材。
+- **状态是计算值，不是存储字段**：`sap_status` 由 `sap_status_of(plan)` 从五要素推导，
+  不作为 `AnalysisPlan` 字段。这样模型不能写入「我是确证性分析」，前端也不能自行推导出另一种状态。
+- **五要素齐全 ≠ 确证性**：系统无法验证事前注册、盲态与 SAP 冻结，措辞只能是
+  「已声明估计目标」。这不是保守，而是防止把聊天里的几句话包装成研究方案。
+  该约束用测试锁住：扫描前后端源码，出现 `pre-specified` 或用「确证性」正面描述本系统流程即失败。
+- **`intercurrent_events` 不参与完整性判定**：允许空列表表示「无伴发事件」。
+  若把空列表判为未声明，大量真实场景会被误标为探索性，反而让状态失去信息量。
+- **字段全给默认空值**：模型常只填一部分。若 pydantic 因缺字段拒绝整份方案，
+  用户会拿不到任何东西；正确做法是接受部分填写，由宿主判定与提示缺失项。
+- **模型允许留空**：提示词明确「无法确定时留空，禁止编造人群与干预」。
+  宁可停在探索性，也不要让模型编出「成年患者」「手术组 vs 保守组」这类看似专业实则无据的内容。
+- **caveat 二选一而非叠加**：两条固定文案并列会互相稀释，用户读不出区别；
+  `_sanitize` 先剔除两条固定文案再按状态追加一条。
+- **不新增 WS 事件**：改五要素走现有 supplement/revise 让模型重出整份方案。
+  这避免了 `estimand_update` 的部分更新语义与并发冲突，代价是重出方案——与该卡片现有交互一致。
+
+## 17. 能力披露的维护规则（spec 030）
+
+- **`planned` 不是备忘清单，是对外承诺的缺口**：它直接进 `/capabilities` 并被前端展示，
+  用户会据此判断「这个工具能不能做某事」。写错等于误导。
+- **必须写「已实现 X；未实现 Y」**：只列方法名（如「Holm / Hochberg / Dunnett」）时，
+  读者无法区分哪些已做、哪些没做。`multiplicity_control` 曾因此长期暗示 Holm/Dunnett 未实现，
+  实际它们在 025 已落地。
+- **测试只能守结构，守不住语义**：直接判断「描述里的方法有没有实现」需要中文能力名到工具名的映射，
+  硬做会大量误伤。因此测试守两条可判定的约束——每条 `planned` 的 `description` 必须含「未实现」
+  或「不支持」；`planned` 的 `name` 不得与注册表键重名。前者逼作者表态，后者防「已实现仍挂 planned」。
+- **落地一个能力时，必须回头改 planned**：这是唯一需要人记住的环节；测试只能在下一次跑时提醒
+  「描述里没有未实现范围」，不能提醒「你该把它删了」。
+
+## 18. 审查整改与上线收尾的架构决策（批次 1–11，spec 032–046 期间）
+
+- **执行期后台化（批次 8）**：Agently `async_start`（auto_close=False）阻塞至流程首个暂停点、
+  `async_close` 会 `_drain_pending_tasks` 等计算线程收尾——因此句柄创建与启动必须拆分
+  （create 同步登记、start 进后台任务），中断路径不得在 WS 收包循环里等 close
+  （移交被取消任务的 CancelledError 后台路径）。这是「源码验证先于设计」的一次直接兑现。
+- **事件流 IO 策略（批次 3）**：EventLog 常规帧 O(1) 追加；超阈值轮转用 tmp + os.replace 原子替换、
+  保留尾部一半——回放语义（last_seq 缺口补发）不变，崩溃不再截断整日志。
+- **测试环境与 .env（批次 7）**：conftest 强制 `build_gateway` 抛错（real_llm 豁免）——
+  「测试不得依赖 .env」由约定变机制；模块级 app 惰性化（PEP 562）消除 import 期真实数据根
+  恢复的副作用，全量套件从 250s 提速到 ~55s。
+- **数据产出型工具约定（028/045）**：impute 与清洗工具统一「产物 CSV + `_next_frame`（037 链间管道）+
+  service 注册 dataset_added（不切 active）」三件套；无变化（如去重无重复行）不产数据集。
+- **鉴权边界（038/044 + 批次 5/11）**：直链（图片/下载）无法带请求头 → `?token=` 与 WS 同口径；
+  login 用 compare_digest + 60s 窗口 5 次失败 429（内存计数，单进程适用；多副本需换共享存储）。
+
+## 19. 上线前终审的行为与契约收口（2026-11-19）
+
+- **工作区激活必须前后端同一真相源**：后端 `active_dataset_id` 决定「chat 用哪张表」，
+  而此前前端点工作区标签只改本地显示、从不通知后端（`workspace` WS 事件与
+  `POST /sessions/{sid}/workspace/{dsid}/activate` 都存在但无人调用）。后果是
+  「看到新表、分析旧表」的静默错分析。结论：切标签走 REST 激活（与 WS 连接状态解耦：
+  跨会话切标签时 WS 正在重连），后端激活后落快照；前端 `data_profile` 事件增加
+  `active` 语义位——只有「首次绑定」与「显式激活」才改会话绑定，已绑定会话再上传
+  只是新增标签（046 的既有约定不变）。
+- **静态外壳与业务数据分离鉴权**：`MEDSTA_USERS`/`MEDSTA_AUTH_TOKEN` 下若连 `/` 与
+  `/assets/*` 也要令牌，浏览器无法加载登录页与脚本（prod 单端口 + 鉴权必然白屏）。
+  放行范围限定为 SPA 入口与构建产物（`_is_public_shell`），`/data`、`/export`、
+  `/report`、`/sessions` 等业务路径仍强制令牌。
+- **图表选择白名单来自注册表**：`chart_config` 每步下发 `charts`（`ToolSpec.charts`），
+  前端只列可选项；后端对越界值降级为该工具首个可用图。此前前端列全量枚举，
+  用户可为 describe 选 survival_curve，渲染失败虽被隔离（`chart_error`），
+  但用户看到的是「结果里没有图」。
+- **后台任务槽位按任务身份释放**：interrupt 的取消是异步投递的，被取消的旧任务
+  与新任务会短暂共存。收尾必须 `asyncio.current_task() is self._tasks[sid]` 才 pop/discard，
+  否则旧任务会把新任务的登记与忙锁一起清掉（interrupt 失效 + 同会话双跑）。
+- **删除会话必须清理旁路状态**：`_requests`/`_pending_chats`/`_revision_notes`/`_busy`
+  等按 session_id 索引的字典此前只清 plans/reports，删除后随进程常驻（内存泄漏）。
+- **`.xls` 是依赖问题不是代码问题**：pandas 的 .xls 引擎是 xlrd（openpyxl 只支持 .xlsx）。
+  pyproject 补 `xlrd>=2.0`，并在缺包时给「另存为 .xlsx」的可执行提示而非 ImportError。
+- **WS 4401/4403 不再无限重连**：令牌存于服务端内存表，后端重启后全部失效；
+  前端收到 4401/4403 应停止退避重连并回到登录卡，而不是每 10s 撞一次墙。
+- **刷新恢复：持久快照 + 回放增量（2026-11-20）**：右栏不能只由 WS 事件流重建——事件流按阈值轮转
+  （035 只保留尾部一半），长时间会话的 `data_profile` 早已被裁掉，刷新后必然「左栏有、右栏空」。
+  结论：新增 `GET /sessions/{sid}/workspace` 作为持久真相源，回放只做增量；两者按
+  `dataset_id`/`report_id` 幂等合并（`upsertReport` 必须按 `report_id` 去重，否则回放重放历史
+  `review_request` 会堆出重复统计表与图表）。
+- **工作区必须带会话归属**：`WorkspaceTab` 增加必填 `sessionId`，标签、计数、`activeWorkspace`
+  选取都限定当前会话；切到无数据集的会话时清空 `activeWorkspaceId`。此前的全局平面数组 +
+  残留 id 会让右栏停在其他会话的表/报告上，属「静默错看数据」级别的问题。
+- **默认会话恢复**：`activeChatId` 曾恒为初始 null，刷新后左右两栏都是空态。现按
+  `localStorage.medsta_active_session` 回退到列表首个；但「当前阶段」仍以服务端为准——
+  `resumed` 帧的 `stage` 用于纠正回放期被历史 `progress` 帧推上去的 `phase`。
+- **REST 变更必须经 `service.broadcast`（2026-11-20）**：`SessionService` 维护会话级发送器注册表
+  （WS 连接注册 `send_frame`、`finally` 摘除），`broadcast` 先 `EventLog.commit`（分配 seq + 落盘）
+  再逐个推送在线连接。这样「工作台改列类型」与「会话区留记录」是**同一次服务端事实**：在线即时到达、
+  离线（无连接/刷新前）也能通过 resume 回放重建。反面做法是前端本地 emit 一条假提示——多标签页不同步、
+  刷新即丢，不能作为可核对记录。因此 REST 路由可 `async` + `run_in_threadpool` 执行 pandas 变更。
+- **AI 建议的消费语义（2026-11-20）**：`column_type_suggestions` 到达后建议条持久显示；用户采纳
+  （逐列或全部）时前端按列消费、服务端在 `type_confirmed` 里再清一次（幂等）；模型分析期间按钮进入
+  加载态并给出「表越大越慢」的预期管理，另有 90s 超时兜底——模型网关无响应时不能永久卡住入口。
+- **方案即流程图，执行即节点交付（047）**：一次性让模型产出「完整管线 + 全部参数」既不 stable 也难以校验。
+  现在 `steps[].depends_on` + `plan_flow()` 把方案表达成图（节点必须是注册表工具，缺省依赖宿主补线性链），
+  `plan` 事件同时下发结构化 `flow` 与 `mermaid` 文本；用户确认的是**图**，不是一段自然语言。
+- **失败隔离的粒度从「执行」下沉到「节点」**：executor 每步回调 `on_step_result`，服务端逐条下发 `step_result`；
+  失败节点保留在报告里（`status=failed` + error），后续节点继续。重试不是「整条链重来」而是
+  `retry_step {index, overrides}` → 重跑该节点及下游（保留链间管道 `_next_frame`）。
+- **模型在修正期的角色是「局部重写」**：`amend_step` 只让模型返回一个节点（`steps` 长度必须为 1），
+  输入含当前图、该节点、失败原因、用户补充与会话上下文快照；宿主校验后**就地替换并保留原 depends_on/step_id**，
+  图结构不被模型打乱。这与「讨论期让模型出整图」是两个不同的 owner 边界。
+- **上下文分层（owner → session）**：`SessionContext` 只存可安全注入的最小事实（数据摘要、节点状态、失败原因、
+  用户补充，≤2000 字），不存原始数据；`SessionContextStore` 刻意保留 owner 维度，多用户上线无需改调用方。
+- **审计记录是旁路**：`_record` 写入失败（SQLite 锁、事件循环切换）只记 warning。此前它会把正常讨论变成
+  `EXECUTION_FAILED`——这也是「偶发失败」用例的真实根因（Agently store 的 Lock 绑定在另一事件循环）。

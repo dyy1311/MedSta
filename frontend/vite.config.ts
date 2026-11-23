@@ -13,6 +13,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/sessions": API_TARGET,
+      "/auth": API_TARGET,
+      "/report": API_TARGET,
+      "/templates": API_TARGET,
       "/capabilities": API_TARGET,
       "/export": API_TARGET,
       "/data": API_TARGET,

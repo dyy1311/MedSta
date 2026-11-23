@@ -10,9 +10,13 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import IO
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_DIR = _PROJECT_ROOT / "frontend"
+# 子进程日志落盘：终端滚屏会丢掉报错上下文（「查看后端报错」时无处可查）
+DEFAULT_LOG_FILE = _PROJECT_ROOT / "logs" / "dev.log"
+LOG_ROTATE_BYTES = 5 * 1024 * 1024
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -21,6 +25,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8000, help="后端端口（默认 8000）")
     parser.add_argument(
         "--frontend-port", type=int, default=5173, help="dev 模式前端端口（默认 5173）"
+    )
+    parser.add_argument(
+        "--log-file",
+        default=str(DEFAULT_LOG_FILE),
+        help="子进程日志文件（默认 <项目根>/logs/dev.log；传空串关闭）",
     )
     return parser.parse_args(argv)
 
@@ -52,18 +61,47 @@ def ensure_frontend_ready(frontend_dir: Path = FRONTEND_DIR) -> bool:
 # ---- 进程编排 ----
 
 
-async def _pump(stream: asyncio.StreamReader, prefix: str) -> None:
+def open_log_file(path: Path | None) -> IO[str] | None:
+    """打开日志文件（追加 + 行缓冲）；超过阈值先轮转一份 .1。"""
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.exists() and path.stat().st_size > LOG_ROTATE_BYTES:
+            path.replace(path.with_suffix(path.suffix + ".1"))
+    except OSError:
+        pass
+    return path.open("a", encoding="utf-8", buffering=1)
+
+
+async def _pump(
+    stream: asyncio.StreamReader, prefix: str, log_file: IO[str] | None = None
+) -> None:
     while True:
         line = await stream.readline()
         if not line:
             break
-        sys.stdout.write(f"[{prefix}] {line.decode(errors='replace')}")
+        text = f"[{prefix}] {line.decode(errors='replace')}"
+        sys.stdout.write(text)
         sys.stdout.flush()
+        if log_file is not None:
+            try:
+                log_file.write(text)
+            except OSError:
+                pass
 
 
-async def run_dev(*, port: int, frontend_port: int) -> int:
+async def run_dev(
+    *, port: int, frontend_port: int, log_path: Path | None = DEFAULT_LOG_FILE
+) -> int:
     """并发启动后端与前端；任一退出则终止整组，Ctrl+C 优雅关闭。"""
     backend_cmd, frontend_cmd = build_dev_commands(port=port, frontend_port=frontend_port)
+    log_file = open_log_file(log_path)
+    if log_file is not None:
+        import datetime
+
+        log_file.write(f"\n===== launcher start {datetime.datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+        print(f"[launcher] 日志写入 {log_path}")
     cwd_by_name = {
         "backend": _PROJECT_ROOT / "backend",
         "frontend": FRONTEND_DIR,
@@ -80,7 +118,8 @@ async def run_dev(*, port: int, frontend_port: int) -> int:
             start_new_session=True,
         )
         procs.append((name, proc))
-        pumps.append(asyncio.create_task(_pump(proc.stdout, name)))
+        assert proc.stdout is not None
+        pumps.append(asyncio.create_task(_pump(proc.stdout, name, log_file)))
         print(f"[launcher] {name} 已启动 (pid={proc.pid})")
 
     stop = asyncio.Event()
@@ -109,7 +148,7 @@ async def run_dev(*, port: int, frontend_port: int) -> int:
     for _, proc in procs:
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _signal_group(proc, signal.SIGKILL)
             await proc.wait()
     # 清理：先摘除信号 handler，避免 loop 关闭期间回调触发 RuntimeError
@@ -120,6 +159,8 @@ async def run_dev(*, port: int, frontend_port: int) -> int:
     for task in pumps:
         task.cancel()
     await asyncio.gather(any_exit, stop_task, *pumps, return_exceptions=True)
+    if log_file is not None:
+        log_file.close()
     print("[launcher] 已全部退出")
     return 0
 
@@ -134,7 +175,7 @@ def _signal_group(proc: asyncio.subprocess.Process, sig: signal.Signals) -> None
         pass
 
 
-def run_prod(*, port: int) -> int:
+def run_prod(*, port: int, log_path: Path | None = DEFAULT_LOG_FILE) -> int:
     """构建前端后单进程启动（SPA 托管在 app 内按 dist 存在性自动启用）。"""
     build_cmd, serve_cmd = build_prod_commands(port=port)
     import subprocess
@@ -145,7 +186,19 @@ def run_prod(*, port: int) -> int:
         print("[launcher] 前端构建失败，终止启动")
         return result.returncode
     print("[launcher] 构建完成，启动单端口服务…")
-    return subprocess.run(serve_cmd, cwd=str(_PROJECT_ROOT / "backend")).returncode
+    log_file = open_log_file(log_path)
+    if log_file is None:
+        return subprocess.run(serve_cmd, cwd=str(_PROJECT_ROOT / "backend")).returncode
+    print(f"[launcher] 日志写入 {log_path}")
+    try:
+        return subprocess.run(
+            serve_cmd,
+            cwd=str(_PROJECT_ROOT / "backend"),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        ).returncode
+    finally:
+        log_file.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,9 +210,12 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         print("[launcher] 未找到 uvicorn，请先在 Sta 环境安装后端：cd backend && pip install -e .[dev]")
         return 1
+    log_path = Path(args.log_file) if args.log_file else None
     if args.prod:
-        return run_prod(port=args.port)
-    return asyncio.run(run_dev(port=args.port, frontend_port=args.frontend_port))
+        return run_prod(port=args.port, log_path=log_path)
+    return asyncio.run(
+        run_dev(port=args.port, frontend_port=args.frontend_port, log_path=log_path)
+    )
 
 
 if __name__ == "__main__":

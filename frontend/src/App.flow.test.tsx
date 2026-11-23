@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import PlotSuggestCard from "./chat/PlotSuggestCard";
 import {
   FakeWebSocket,
   PLAN_EVENT,
@@ -135,6 +136,9 @@ describe("会话流交互", () => {
       });
     });
     expect(await screen.findByText("出图前确认")).toBeInTheDocument();
+    // 终审修复：等配置期输入框必须只读——否则用户发消息会被 SESSION_BUSY 拒绝，
+    // 而 error 帧会清掉配置卡，会话卡在「无卡可确认、输入又被拒」的死角。
+    expect(composer).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /按此配置执行/ }));
     expect(socket().sent.at(-1)).toMatchObject({
@@ -189,6 +193,62 @@ describe("会话流交互", () => {
     });
   });
 
+  it("plan 事件透传 estimand/sap_status，方案卡呈现估计目标状态", async () => {
+    const { container } = render(<App />);
+    await openSessionWithData(container);
+
+    const composer = screen.getByPlaceholderText("描述分析目标，或对方案提出修正意见…");
+    fireEvent.change(composer, { target: { value: "比较两组疗效" } });
+    fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+
+    act(() => {
+      socket().emit({
+        type: "type_review",
+        dataset_id: "d1",
+        message: "请先确认各列的变量类型",
+        columns: [
+          { name: "group", type: "categorical", missing: 0 },
+          { name: "value", type: "continuous", missing: 0 },
+        ],
+      });
+    });
+    await screen.findByText("请敲定变量类型");
+    fireEvent.click(screen.getByRole("button", { name: /确认类型，开始讨论/ }));
+
+    act(() => {
+      socket().emit({
+        type: "plan",
+        message: "按估计目标框架执行两组比较。",
+        steps: [
+          {
+            step_id: "step_1",
+            title: "两组比较",
+            method: "group_compare",
+            target_columns: ["value"],
+            chart_type: "none",
+            params: { group_column: "group" },
+            rationale: "两组连续结局比较",
+          },
+        ],
+        options: [{ id: "go", label: "按此执行", action: "confirm" }],
+        estimand: {
+          population: "接受手术的成年患者",
+          variable: "术后 12 个月 JOA 评分",
+          treatment: "新术式 vs 常规术式",
+          intercurrent_events: [{ event: "中途停药", strategy: "treatment-policy" }],
+          summary_measure: "两组均数差",
+        },
+        sap_status: "estimand_declared",
+      });
+    });
+
+    // 缺陷行为：App 层丢弃字段 → 方案卡永远显示「探索性分析」
+    expect(await screen.findByText("已声明估计目标")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("查看估计目标"));
+    expect(screen.getByText("接受手术的成年患者")).toBeInTheDocument();
+    expect(screen.getByText("术后 12 个月 JOA 评分")).toBeInTheDocument();
+  });
+
   it("表格结果可补绘图：plot_suggest → plot_later", async () => {
     const { container } = render(<App />);
     await openSessionWithData(container);
@@ -208,6 +268,21 @@ describe("会话流交互", () => {
       step_index: 0,
       chart_type: "histogram",
     });
+  });
+
+  it("补绘图按钮连点只提交一次", () => {
+    const onPlotLater = vi.fn();
+    render(
+      <PlotSuggestCard
+        steps={[{ step_index: 0, title: "分布统计", charts: ["histogram", "boxplot"] }]}
+        submitting={false}
+        onPlotLater={onPlotLater}
+      />
+    );
+    const button = screen.getByRole("button", { name: /绘图/ });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(onPlotLater).toHaveBeenCalledTimes(1);
   });
 
   it("审阅提出修正 → 发送 revise 并回到讨论", async () => {
@@ -290,16 +365,18 @@ describe("会话流交互", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /工作区（1）/ }));
     const workspaceSection = container.querySelectorAll<HTMLElement>("main > section")[1];
-    const typeSelect = within(workspaceSection).getAllByRole("combobox")[1];
+    // [0]=批量类型下拉，[1]=group 行，[2]=value 行
+    const typeSelect = within(workspaceSection).getAllByRole("combobox")[2];
     fireEvent.change(typeSelect, { target: { value: "ordinal" } });
 
     const patchCall = fetchSpy.mock.calls.find(
       ([, init]) => (init as RequestInit | undefined)?.method === "PATCH"
     );
     expect(patchCall).toBeTruthy();
+    // 单列修改也走批量端点：带 source，服务端据此在会话区广播「列类型已更新」
     expect(JSON.parse(String((patchCall?.[1] as RequestInit).body))).toEqual({
-      column: "value",
-      type: "ordinal",
+      types: { value: "ordinal" },
+      source: "manual",
     });
     expect(await within(workspaceSection).findByDisplayValue("数值-等级型")).toBeInTheDocument();
   });
@@ -323,7 +400,7 @@ describe("会话流交互", () => {
       "href",
       "/export/s1/0?format=xlsx"
     );
-    expect(within(workspaceSection).getByText("执行产出（1）")).toBeInTheDocument();
+    expect(within(workspaceSection).getByText("图表交付（1）")).toBeInTheDocument();
     expect(within(workspaceSection).getByRole("img")).toHaveAttribute(
       "src",
       "/data/s1/d1/artifacts/step_0_describe_histogram.png"

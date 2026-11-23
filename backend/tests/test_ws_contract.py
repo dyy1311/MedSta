@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from medsta.agents.discussion import AnalysisPlan, DiscussionAgent, PlanOption, PlanStep
 from medsta.session.manager import manager
-
 from tests.helpers import (
     PLAN_WITH_CHART,
     collect_until,
@@ -218,5 +217,23 @@ def test_revise_returns_to_discussion_with_note(client, app, session_id: str) ->
         ws.send_json({"type": "review", "decision": "revise", "content": "不要直方图"})
         _, back = collect_until(ws, {"back_to_discussion"})
 
-        assert "继续讨论" in back["message"]
+        assert "修正意见" in back["message"]
         assert manager.get(session_id).status.value == "discussing"
+        # 契约升级（047 后续）：带意见的 revise 直接接续讨论，模型按修正重出方案，
+        # 用户不必再手动发一条（此前只回「已记录修正意见」，重复点提交会撞 NO_ACTIVE_RUN）
+        _, plan = collect_until(ws, {"plan", "error"})
+        assert plan["type"] == "plan"
+        assert plan["steps"]
+
+
+def test_ws_rejects_malformed_frame_without_dropping(client, app, session_id: str) -> None:
+    """P1: 非 JSON 帧回 INVALID_PARAM 错误帧且连接保持可用，不再整条断开。"""
+    with client.websocket_connect(f"/ws/{session_id}") as ws:
+        ws.send_text("not-json{{")
+        _, error = collect_until(ws, {"error"})
+        assert error["code"] == "INVALID_PARAM"
+
+        # 连接仍可用：后续合法协议错误照常响应
+        ws.send_json({"type": "bogus_after_bad_frame"})
+        _, second = collect_until(ws, {"error"})
+        assert second["code"] == "PROTOCOL_UNSUPPORTED"

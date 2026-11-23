@@ -32,6 +32,12 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: pip install -e ".[dev]"
+      - name: Lint (ruff)
+        working-directory: backend
+        run: python -m ruff check src tests
+      - name: Type check (mypy)
+        working-directory: backend
+        run: python -m mypy src/medsta
       - name: Run tests with coverage gate
         working-directory: backend
         # 门槛 = 2026-10-21 实测 88%（1931 语句 / 228 未覆盖）向下取整再减 5pt。

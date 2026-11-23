@@ -29,9 +29,17 @@ blob-report/
 
 # 运行时数据（会话记录、上传数据、图表 artifact）
 backend/data/
+# launcher 子进程日志（后端/前端 stdout+stderr）
+logs/
 *.sqlite3
+
+# 大文件（教材 PDF 31MB，仅本地参考，不入库）
+docs/*.pdf
 
 # IDE / 系统
 .idea/
 .vscode/
 .DS_Store
+
+# AI 协作工具产物（计划文件，不入库）
+.codebuddy/

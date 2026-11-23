@@ -22,6 +22,16 @@ export default function CapabilityDrawer({ open, onClose }: Props) {
       });
   }, [open, data]);
 
+  // Esc 关闭：抽屉是覆盖层，键盘用户不能只能靠鼠标点 ×
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
   const groups = data
     ? Array.from(new Set(data.tools.map((tool) => tool.category)))
@@ -29,7 +39,12 @@ export default function CapabilityDrawer({ open, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-primary-dark/40 backdrop-blur-sm">
-      <div className="h-full w-full max-w-md animate-fade-in-up overflow-y-auto bg-surface-card p-5 shadow-2xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="统计能力披露"
+        className="h-full w-full max-w-md animate-fade-in-up overflow-y-auto bg-surface-card p-5 shadow-2xl"
+      >
         <div className="mb-4 flex items-center gap-2">
           <Boxes className="h-5 w-5 text-primary" />
           <h2 className="text-base font-semibold text-primary-dark">统计能力披露</h2>

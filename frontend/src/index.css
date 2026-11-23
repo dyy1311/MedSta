@@ -2,12 +2,117 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body,
-#root {
-  height: 100%;
+@layer base {
+  @font-face {
+    font-family: "Figtree";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("@fontsource/figtree/files/figtree-latin-400-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Figtree";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("@fontsource/figtree/files/figtree-latin-500-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Figtree";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("@fontsource/figtree/files/figtree-latin-600-normal.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Figtree";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("@fontsource/figtree/files/figtree-latin-700-normal.woff2") format("woff2");
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-page text-ink antialiased;
+    font-size: 16px;
+    line-height: 1.6;
+    /* 统计读数对齐：等宽数字 */
+    font-variant-numeric: tabular-nums;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-primary-dark;
+  }
+
+  :focus-visible {
+    outline: 3px solid #0e7490;
+    outline-offset: 2px;
+  }
+
+  /* 细滚动条：不干扰数据密度 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(107, 114, 128, 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(107, 114, 128, 0.3);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(107, 114, 128, 0.5);
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
-body {
-  @apply bg-surface-page text-ink antialiased;
+@layer utilities {
+  /* 页面底纹：临床记录纸上的淡坐标格 */
+  .bg-grid-page {
+    background-image:
+      linear-gradient(rgba(14, 116, 144, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(14, 116, 144, 0.045) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* 进度/加载 shimmer */
+  .shimmer-bar {
+    background: linear-gradient(
+      90deg,
+      rgba(14, 116, 144, 0.12) 25%,
+      rgba(14, 116, 144, 0.45) 50%,
+      rgba(14, 116, 144, 0.12) 75%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* 数字读数：display 字体 + 等宽数字 */
+  .num {
+    font-family: theme("fontFamily.display");
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

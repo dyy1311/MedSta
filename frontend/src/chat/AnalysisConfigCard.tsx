@@ -1,27 +1,14 @@
 import { useState } from "react";
 import { Image, LayoutGrid, Sigma, Play, SkipForward } from "lucide-react";
-import type { ChartConfigRequest } from "../types";
-
-const CHART_OPTIONS = [
-  { value: "boxplot", label: "箱线图" },
-  { value: "violin", label: "提琴图" },
-  { value: "line", label: "折线图" },
-  { value: "bar", label: "柱状图" },
-  { value: "grouped_bar", label: "分组柱状图" },
-  { value: "histogram", label: "直方图" },
-  { value: "scatter", label: "散点图" },
-  { value: "pie", label: "饼图" },
-  { value: "heatmap", label: "热力图" },
-  { value: "qq_plot", label: "Q-Q 图" },
-  { value: "residual_plot", label: "残差图" },
-  { value: "none", label: "不出图" },
-];
+import type { ChartConfigRequest, PlotStyle } from "../types";
+import PlotStyleFields from "../components/PlotStyleFields";
+import { CHART_OPTIONS } from "./chartOptions";
 
 interface Props {
   config: ChartConfigRequest;
   submitting: boolean;
   onConfirm: (payload: {
-    choices: { step_id: string; chart_type: string }[];
+    choices: ({ step_id: string; chart_type: string } & PlotStyle)[];
     layout: string;
     alpha: number;
     correction: string;
@@ -33,15 +20,25 @@ export default function AnalysisConfigCard({ config, submitting, onConfirm }: Pr
   const [chartChoices, setChartChoices] = useState<Record<string, string>>(
     Object.fromEntries(config.steps.map((s) => [s.step_id, s.default_chart]))
   );
+  const [styleByStep, setStyleByStep] = useState<Record<string, PlotStyle>>({});
   const [layout, setLayout] = useState("separate");
   const [alpha, setAlpha] = useState(String(config.alpha));
   const [correction, setCorrection] = useState(config.correction);
+
+  /** 每步只列该工具支持的图（后端按注册表下发）；缺省回退全量枚举 */
+  const optionsFor = (step: { charts?: string[] }) =>
+    step.charts && step.charts.length > 0
+      ? CHART_OPTIONS.filter(
+          (option) => option.value === "none" || step.charts?.includes(option.value)
+        )
+      : CHART_OPTIONS;
 
   const submit = (useDefault = false) => {
     onConfirm({
       choices: config.steps.map((step) => ({
         step_id: step.step_id,
         chart_type: chartChoices[step.step_id] ?? step.default_chart,
+        ...(styleByStep[step.step_id] ?? {}),
       })),
       layout,
       alpha: Number(alpha) || 0.05,
@@ -61,7 +58,7 @@ export default function AnalysisConfigCard({ config, submitting, onConfirm }: Pr
       <div className="space-y-2">
         {config.steps.map((step) => (
           <div key={step.step_id} className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-page px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{step.title}</span>
+            <span className="min-w-0 flex-1 break-words text-sm font-medium text-ink">{step.title}</span>
             <select
               value={chartChoices[step.step_id] ?? step.default_chart}
               onChange={(event) =>
@@ -69,12 +66,27 @@ export default function AnalysisConfigCard({ config, submitting, onConfirm }: Pr
               }
               className="cursor-pointer rounded-md border border-ink/15 bg-white px-2 py-1 text-xs outline-none focus:border-primary"
             >
-              {CHART_OPTIONS.map((option) => (
+              {optionsFor(step).map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </select>
+            {(chartChoices[step.step_id] ?? step.default_chart) !== "none" && (
+              <details className="w-full min-w-0">
+                <summary className="cursor-pointer break-words text-[11px] text-ink-muted">
+                  图标题、坐标轴与组名（可选）
+                </summary>
+                <div className="mt-2">
+                  <PlotStyleFields
+                    value={styleByStep[step.step_id] ?? {}}
+                    onChange={(next) =>
+                      setStyleByStep((prev) => ({ ...prev, [step.step_id]: next }))
+                    }
+                  />
+                </div>
+              </details>
+            )}
           </div>
         ))}
       </div>
@@ -139,7 +151,7 @@ export default function AnalysisConfigCard({ config, submitting, onConfirm }: Pr
         <button
           onClick={() => submit(false)}
           disabled={submitting}
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-all hover:bg-primary-dark active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
+          className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
         >
           <Play className="h-4 w-4" />
           {submitting ? "正在执行…" : "按此配置执行"}

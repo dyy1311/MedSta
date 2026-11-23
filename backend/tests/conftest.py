@@ -22,6 +22,40 @@ def _clean_session_registry():
     manager.clear()
 
 
+@pytest.fixture(autouse=True)
+def _default_data_root_in_tmp(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """无参 `create_app()` 也落 tmp：测试不得写真实 `backend/data`。
+
+    9 处用例直接 `create_app()`（capabilities / spa_hosting / session_api /
+    typing / survival_edges），走默认 `data/sessions`（cwd=backend）——
+    每轮全量会在真实数据根留下若干 discussing 会话目录，dev 侧看起来像
+    「刷新后多出陌生会话」。显式传 `data_root=` 的用例不受影响。
+    """
+    monkeypatch.setenv("MEDSTA_DATA_ROOT", str(tmp_path / "default-sessions"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gateway(request, monkeypatch):
+    """测试环境隔离真实模型网关（审查 P1 地雷）。
+
+    项目根存在真实 `.env` 时 `_build_service` 会构建真实
+    InterpretationAgent/ColumnTypeAdvisor——交付态 chat / AI 类型建议
+    会打真模型并无限等待（test_export_chart_formats 曾因此挂死）。
+    强制 app 工厂内 build_gateway 抛错，「测试不得依赖 .env」由约定
+    变为机制；真实模型冒烟（real_llm marker，MEDSTA_REAL_LLM=1 才
+    运行）显式豁免。
+    """
+    if request.node.get_closest_marker("real_llm"):
+        return
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("测试环境不构建真实模型网关（conftest 隔离 .env）")
+
+    # _build_service 内是函数局部 `from medsta.config import build_gateway`，
+    # 调用期从 medsta.config 命名空间解析——补丁源头模块即可拦截
+    monkeypatch.setattr("medsta.config.build_gateway", _raise)
+
+
 @pytest.fixture
 def data_root(tmp_path: pathlib.Path) -> pathlib.Path:
     """独立数据根：上传文件、artifact、记录都落在 tmp_path。"""

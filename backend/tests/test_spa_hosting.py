@@ -49,3 +49,26 @@ def test_spa_disabled_without_dist(monkeypatch, tmp_path) -> None:
     client = TestClient(create_app())
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/").status_code == 404
+
+
+def test_spa_fallback_blocks_path_traversal(tmp_path, monkeypatch) -> None:
+    """P0: SPA catch-all 拒绝 .. 逃逸读取 dist 外文件，非法路径回退 index.html。"""
+    dist = _make_dist(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top-secret", encoding="utf-8")
+    monkeypatch.setattr("medsta.app.FRONTEND_DIST", dist)
+    client = TestClient(create_app())
+
+    # URL 编码的 ..（%2F、%2E 两种写法）都不得读到 dist 外的 secret.txt
+    for path in ("/..%2Fsecret.txt", "/..%2F..%2Fsecret.txt", "/%2E%2E/secret.txt"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert resp.text == INDEX_HTML, path
+
+    # dist 内子目录的合法文件仍可正常读取
+    nested = dist / "nested"
+    nested.mkdir()
+    (nested / "page.html").write_text("<p>nested</p>", encoding="utf-8")
+    resp = client.get("/nested/page.html")
+    assert resp.status_code == 200
+    assert resp.text == "<p>nested</p>"

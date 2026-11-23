@@ -47,3 +47,18 @@ def test_table_profile_summary_and_json() -> None:
     payload = profile.model_dump_json()
     assert isinstance(payload, str)
     assert '"row_count":4' in payload.replace(" ", "")
+
+
+def test_numeric_type_on_text_column_does_not_crash() -> None:
+    """S5: 文本列被用户改为连续时按 to_numeric 兜底，不可解析值计为缺失而非 TypeError。"""
+    from medsta.data.profiler import apply_column_type
+
+    df = pd.DataFrame({"city": ["Beijing", "Shanghai", "12.5"]})
+    profile = profile_dataframe(df)
+
+    apply_column_type(df, profile, "city", "continuous")
+
+    stats = profile.columns["city"].stats
+    assert stats["count"] == 1
+    assert stats["mean"] == 12.5
+    assert profile.columns["city"].missing == 2

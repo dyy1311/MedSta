@@ -111,3 +111,12 @@ def test_from_env_loads_dotenv(monkeypatch, tmp_path) -> None:
     config = config_module.ProviderConfig.from_env()
     assert config.model == "exported-model"
     assert config.base_url == "https://api.fromfile/v1"
+
+
+def test_extract_delta_handles_null_delta_chunk() -> None:
+    """批次11 生产加固：部分兼容端末 chunk 的 delta 为 null——不得 AttributeError。"""
+    from medsta.config import _extract_delta
+
+    assert _extract_delta('{"choices": [{"delta": null}]}') == ""
+    assert _extract_delta('{"choices": []}') == ""
+    assert _extract_delta('{"choices": [{"delta": {"content": "你好"}}]}') == "你好"

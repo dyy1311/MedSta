@@ -2,13 +2,12 @@
 import io
 
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from medsta.agents.discussion import PlanStep
-from medsta.data.profiler import profile_dataframe
-from medsta.stats.registry import execute_step, validate_step
 from medsta.app import create_app
+from medsta.data.profiler import profile_dataframe
+from medsta.stats.registry import execute_step
 
 
 def _profile_types(df: pd.DataFrame) -> dict:

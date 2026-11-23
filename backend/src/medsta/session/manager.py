@@ -8,7 +8,6 @@ import pathlib
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict
 
 import pandas as pd
 
@@ -20,6 +19,24 @@ class SessionStatus(str, Enum):
     PLAN_CONFIRMED = "plan_confirmed"
     EXECUTING = "executing"
     DELIVERED = "delivered"
+
+
+class InvalidStateTransition(ValueError):
+    """非法状态转移（协议顺序错误，宿主确定性判定）。"""
+
+
+# 允许的转移表（源状态 → 目标状态集合）：宿主强约束，非各 handler 自觉。
+# 讨论 → 图表配置/执行；执行 → 交付或失败/中断回讨论；交付后修正回讨论。
+_ALLOWED_TRANSITIONS: dict[SessionStatus | None, set[SessionStatus]] = {
+    SessionStatus.DISCUSSING: {
+        SessionStatus.DISCUSSING,
+        SessionStatus.PLAN_CONFIRMED,
+        SessionStatus.EXECUTING,
+    },
+    SessionStatus.PLAN_CONFIRMED: {SessionStatus.EXECUTING, SessionStatus.DISCUSSING},
+    SessionStatus.EXECUTING: {SessionStatus.DELIVERED, SessionStatus.DISCUSSING},
+    SessionStatus.DELIVERED: {SessionStatus.DISCUSSING, SessionStatus.DELIVERED},
+}
 
 
 @dataclass
@@ -35,6 +52,7 @@ class SessionData:
 @dataclass
 class Session:
     session_id: str
+    owner: str = "local"
     status: SessionStatus = SessionStatus.DISCUSSING
     datasets: dict = field(default_factory=dict)  # dataset_id -> SessionData
     active_dataset_id: str | None = None
@@ -49,18 +67,31 @@ class Session:
 
 
 class SessionManager:
-    """管理会话创建、数据挂载与状态流转。内存实现；持久化由 storage/records 负责。"""
+    """管理会话创建、数据挂载与状态流转。
+
+    内存实现；快照持久化由 session/persistence.py 负责，事件流由 session/events.py
+    负责，执行记录由 Agently LocalRecordStore 负责。
+    """
 
     def __init__(self) -> None:
-        self._sessions: Dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
 
-    def create_session(self) -> Session:
-        session = Session(session_id=uuid.uuid4().hex)
+    def create_session(self, session_id: str | None = None, owner: str = "local") -> Session:
+        """创建会话；指定 session_id 供快照恢复使用（状态由恢复方直接赋值）。"""
+        session = Session(session_id=session_id or uuid.uuid4().hex, owner=owner)
         self._sessions[session.session_id] = session
         return session
 
+    def list_by_owner(self, owner: str) -> list[Session]:
+        """044：按归属列出会话（多用户隔离）。"""
+        return [s for s in self._sessions.values() if s.owner == owner]
+
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
+
+    def delete(self, session_id: str) -> bool:
+        """移除会话（内存）；磁盘痕迹由 SessionStore.delete 清理（批次12）。"""
+        return self._sessions.pop(session_id, None) is not None
 
     def attach_data(
         self,
@@ -90,8 +121,9 @@ class SessionManager:
         return dataset_id
 
     def attach_dataset(self, session_id: str, *, df: pd.DataFrame, name: str,
-                       dataset_id: str | None = None) -> str:
-        """测试/快捷入口：无文件路径的内存挂载。"""
+                       dataset_id: str | None = None,
+                       data_root: str | pathlib.Path = "data/sessions") -> str:
+        """测试/快捷入口：无文件路径的内存挂载（生产注册请走 attach_data 传真实路径）。"""
         from medsta.data.profiler import profile_dataframe
 
         resolved = dataset_id or uuid.uuid4().hex[:8]
@@ -100,7 +132,7 @@ class SessionManager:
             df=df,
             dataset_path=name,
             profile=profile_dataframe(df),
-            artifact_dir=pathlib.Path("data/sessions") / session_id / resolved / "artifacts",
+            artifact_dir=pathlib.Path(data_root) / session_id / resolved / "artifacts",
             name=name,
             dataset_id=resolved,
         )
@@ -118,6 +150,12 @@ class SessionManager:
 
     def transition(self, session_id: str, status: SessionStatus) -> Session:
         session = self._sessions[session_id]
+        allowed = _ALLOWED_TRANSITIONS.get(session.status, set())
+        if status not in allowed:
+            raise InvalidStateTransition(
+                f"非法状态转移：{session.status.value} → {status.value}（"
+                f"允许：{', '.join(sorted(s.value for s in allowed))}）"
+            )
         session.status = status
         return session
 

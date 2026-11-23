@@ -11,21 +11,39 @@ router = APIRouter()
 # 方法学上重要但本期未实现的能力：显式披露，避免前端过度承诺
 _PLANNED = [
     {
-        "name": "survival_analysis",
-        "title": "生存分析",
-        "description": "Cox 比例风险、Kaplan-Meier、RMST、Fine-Gray 竞争风险（需引入 lifelines）",
+        "name": "competing_risk",
+        "title": "竞争风险（Fine-Gray）",
+        "description": (
+            "子分布风险模型（Fine-Gray）与累积发生函数未实现；"
+            "当前生存分析只支持右删失的单一终点，竞争事件不能当作独立删失处理"
+        ),
         "status": "planned",
     },
     {
         "name": "multiple_imputation",
-        "title": "多重插补",
-        "description": "MICE 多重插补与 tipping point 敏感性分析（对应缺失决策板 C）",
+        "title": "完整多重插补（Rubin 合并）",
+        "description": (
+            "当前 impute 为单数据集插补（标准误偏小）；"
+            "m 次插补后按 Rubin 规则合并的完整 MI 与 tipping point 未实现"
+        ),
+        "status": "planned",
+    },
+    {
+        "name": "sap_export",
+        "title": "SAP 摘要导出与事前注册",
+        "description": (
+            "当前仅在方案卡展示估计目标（ICH E9(R1) 五要素）；"
+            "SAP 文档导出、版本号与事前注册信息未实现"
+        ),
         "status": "planned",
     },
     {
         "name": "multiplicity_control",
         "title": "多重性校正",
-        "description": "Holm / Hochberg / Dunnett 与层级 gatekeeping（对应决策板 D）",
+        "description": (
+            "已实现：Holm、Dunnett、Tukey、Schéffé、SNK-q、LSD-t 与 Bonferroni；"
+            "未实现：Hochberg、层级 gatekeeping、图形法与期中 α 消耗"
+        ),
         "status": "planned",
     },
 ]

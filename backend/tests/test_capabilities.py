@@ -18,7 +18,33 @@ def test_capabilities_endpoint_lists_methods_and_charts() -> None:
     chart_names = {item["name"] for item in body["charts"]}
     assert {"histogram", "qq_plot", "violin", "residual_plot"} <= chart_names
     planned = {item["name"] for item in body["planned"]}
-    assert "survival_analysis" in planned
+    assert "survival_analysis" in names
+    assert "survival_analysis" not in planned
+    assert "competing_risk" in planned
+    assert "sap_export" in planned
+
+
+def test_capabilities_lists_textbook_tools() -> None:
+    """023 B18: 教材口径的统计描述与参考值范围进入能力披露。"""
+    client = TestClient(create_app())
+    body = client.get("/capabilities").json()
+    tools = {tool["name"]: tool for tool in body["tools"]}
+
+    assert "descriptive_stats" in tools
+    assert "reference_range" in tools
+    assert {"one_sample_test", "randomized_block_anova", "mcnemar_test"} <= set(tools)
+    assert {
+        "factorial_anova", "repeated_measures_anova", "sample_size"
+    } <= set(tools)
+    assert tools["sample_size"]["charts"] == []
+    assert {param["name"] for param in tools["sample_size"]["params"]} >= {
+        "design", "solve", "effect_size", "alpha", "power"
+    }
+    assert {param["name"] for param in tools["reference_range"]["params"]} == {
+        "percentage", "sides", "method"
+    }
+    assert tools["reference_range"]["charts"] == []
+    assert "histogram" in tools["descriptive_stats"]["charts"]
 
 
 class _FakeGateway:
@@ -81,6 +107,7 @@ async def test_option_confirm_runs_plan(env) -> None:
     await service.handle(session_id, {"type": "chat", "content": "分析"}, send)
     await service.wait_idle(session_id)
     await service.handle(session_id, {"type": "option", "option_id": "confirm"}, send)
+    await service.wait_idle(session_id)  # 执行后台驱动，等待审阅请求
     assert any(m["type"] == "review_request" for m in sent)
 
 
@@ -108,3 +135,43 @@ async def test_unknown_option_rejected(env) -> None:
     await service.handle(session_id, {"type": "option", "option_id": "nope"}, send)
     errors = [m for m in sent if m["type"] == "error"]
     assert errors and errors[-1]["code"] == "INVALID_PARAM"
+
+
+def test_planned_entries_declare_unimplemented_scope() -> None:
+    """030 B2: 每条规划中能力必须写明未实现/不支持的范围。
+
+    只列方法名而不表态，会让读者误以为整块能力都还没有；一旦方法落地，
+    模糊清单也不会主动提醒作者回头修改。
+    """
+    from medsta.api.routes_capabilities import _PLANNED
+
+    offenders = [
+        item["name"]
+        for item in _PLANNED
+        if "未实现" not in item["description"] and "不支持" not in item["description"]
+    ]
+
+    assert offenders == []
+
+
+def test_planned_names_do_not_collide_with_registry() -> None:
+    """030 B3: 规划中能力不得与已注册工具重名（防止已实现仍挂 planned）。"""
+    from medsta.api.routes_capabilities import _PLANNED
+    from medsta.stats import registry
+
+    registered = {spec.name for spec in registry.all_tools()} | set(registry.ALIASES)
+    planned = {item["name"] for item in _PLANNED}
+
+    assert planned & registered == set()
+
+
+def test_multiplicity_description_separates_implemented_and_missing() -> None:
+    """030 B1: 多重性条目必须同时写清已实现与未实现部分。"""
+    from medsta.api.routes_capabilities import _PLANNED
+
+    item = next(entry for entry in _PLANNED if entry["name"] == "multiplicity_control")
+    description = item["description"]
+
+    assert "已实现" in description
+    assert "Holm" in description and "Dunnett" in description
+    assert "Hochberg" in description or "gatekeeping" in description

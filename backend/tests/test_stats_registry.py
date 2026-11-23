@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from medsta.agents.discussion import PlanStep
 from medsta.stats.registry import (
@@ -139,6 +138,50 @@ def test_chi_square_two_by_two_odds_ratio(tmp_path) -> None:
     result, _ = execute_step(_df(), step, tmp_path, 0)
     assert "odds_ratio" in result
     assert 0.0 <= result["cramers_v"] <= 1.0
+
+
+def test_mcnemar_accepts_textual_binary_columns(tmp_path) -> None:
+    """P0: McNemar 的分类列不再被数值充分性检查硬拒（阴/阳性文本配对可用）。"""
+    pairs = (
+        [("阳性", "阳性")] * 30
+        + [("阳性", "阴性")] * 5
+        + [("阴性", "阳性")] * 15
+        + [("阴性", "阴性")] * 30
+    )
+    frame = pd.DataFrame(pairs, columns=["method_a", "method_b"])
+    step = _step(
+        "mcnemar_test",
+        target_columns=["method_a", "method_b"],
+        params={"row_column": "method_a", "col_column": "method_b"},
+    )
+
+    assert validate_step(step, frame) == []
+
+    result, _ = execute_step(frame, step, tmp_path, 0)
+    assert result["p_value"] < 0.05
+
+
+def test_chart_failure_keeps_statistical_result(tmp_path, monkeypatch) -> None:
+    """E1: 图表渲染失败时保留统计结果并记录 chart_error，不再整步 failed。"""
+    from medsta.stats import registry as registry_module
+
+    step = _step(
+        "group_compare",
+        target_columns=["age"],
+        params={"group_column": "sex"},
+        chart_type="violin",
+    )
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("渲染崩溃")
+
+    monkeypatch.setattr(registry_module, "render_chart", boom)
+
+    result, artifact = registry_module.execute_step(_df(), step, tmp_path, 0)
+
+    assert result["test"] == "t"  # 统计结果保留
+    assert artifact is None
+    assert "渲染崩溃" in result["chart_error"]
 
 
 def test_logistic_regression_outputs_odds_ratios(tmp_path) -> None:

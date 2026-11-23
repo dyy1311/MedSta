@@ -17,6 +17,14 @@
 
 - 客户端→服务端：`{"type":"chat","content":str}`；`{"type":"confirm_plan"}`；`{"type":"review","decision":"accept"}`；`{"type":"review","decision":"revise","content":str}`
 - 服务端→客户端：`{"type":"data_profile","profile":{...}}`；`{"type":"plan","message":str,"steps":[...]}`；`{"type":"review_request","report":{...}}`；`{"type":"delivered","report":{...}}`；`{"type":"error","message":str}`
+- 022 增量（向后兼容）：
+  - `{"type":"interpretation","summary":str,"steps":[{"step_index":int,"finding":str,"caveat":str}],"caveats":[str],"unverified_numbers":[str]}`——`review_request` 之后异步推送；失败/关闭时不推，前端不显示解读区。
+  - `{"type":"answer","answer":str,"caveats":[str],"unverified_numbers":[str]}`——`delivered` 态 `chat` 的答疑回复；该态下 `chat` 不再产 `plan`。
+  - `delivered` 态 `review {"decision":"revise"}` 语义：回到讨论态并推 `back_to_discussion`，不返回 `NO_ACTIVE_RUN`。
+- 029 增量（向后兼容）：
+  - `plan` 事件新增可选字段 `estimand`（`EstimandSpec | null`：`population`/`variable`/`treatment`/`intercurrent_events[{event, strategy}]`/`summary_measure`）与 `sap_status`（`estimand_declared` 或 `exploratory`，由宿主计算）。缺省时前端按 `null`/`exploratory` 处理。
+- 028 增量（向后兼容）：
+  - `{"type":"dataset_added","dataset_id":str,"name":str,"profile":TableProfile,"imputed":bool,"source_dataset_id":str|null}`——`review_request` 之后推送，表示 `impute` 步骤产出了新的插补数据集。前端只追加工作区标签页，**不切换** `active_dataset_id`；用户手动切换后才改变分析对象。
 
 ## 行为列表（TDD 循环队列）
 

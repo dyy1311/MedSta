@@ -19,6 +19,12 @@ python --version
 node --version
 npm --version
 
+step "Backend lint (ruff)"
+(cd backend && python -m ruff check src tests)
+
+step "Backend type check (mypy)"
+(cd backend && python -m mypy src/medsta)
+
 step "Backend tests"
 if [[ "${CI_SKIP_COVERAGE:-0}" == "1" ]]; then
   (cd backend && python -m pytest)
@@ -36,7 +42,7 @@ step "Frontend build"
 (cd frontend && npm run build)
 
 step "Frontend unit and interaction tests"
-(cd frontend && npm test)
+(cd frontend && npm run test:coverage)
 
 if [[ "${CI_SKIP_E2E:-0}" == "1" ]]; then
   step "E2E skipped (CI_SKIP_E2E=1)"
